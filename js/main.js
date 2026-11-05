@@ -1105,6 +1105,7 @@ async function startWalk() {
   model.setPose('stand');
   controls.target.set(0, 0.6, 8.9);
   camera.position.set(0, 4.2, 15.5);
+  resetTreeFade();
   controls.maxDistance = 14;
 
   walk = { time: 75, coins: 0, items: [], npcs: [], butterflies: [], lastInput: performance.now(), poop: null, poopAt: rnd(25, 50), pooped: false, met: 0, found: 0 };
@@ -1337,6 +1338,33 @@ function updateWalk(dt) {
 
   // カメラ追従
   followCamera(ctrl.pos, 1, dt);
+}
+// ペットとカメラの間にある木・カメラがめり込んだ木を半透明にする
+const _seg = new THREE.Line3(), _cp = new THREE.Vector3(), _ext = new THREE.Vector3();
+function setTreeOpacity(t, a) {
+  t.userData.fade = a;
+  const see = a < 0.999;
+  t.traverse(o => {
+    if (!o.isMesh) return;
+    const mt = o.material;
+    if (mt.transparent !== see) { mt.transparent = see; mt.depthWrite = !see; mt.needsUpdate = true; }
+    mt.opacity = a;
+  });
+}
+function resetTreeFade() { for (const t of park.trees) if (t.userData.fade !== 1) setTreeOpacity(t, 1); }
+function updateTreeFade(dt) {
+  // 注視点（ペット）→カメラの線分。カメラの少し後ろまで延ばしてニアクリップ付近もカバー
+  _ext.copy(camera.position).sub(controls.target).normalize().multiplyScalar(0.6).add(camera.position);
+  _seg.set(controls.target, _ext);
+  const k = 1 - Math.exp(-dt * 10);
+  for (const t of park.trees) {
+    const sp = t.userData.sphere;
+    const block = _seg.closestPointToPoint(sp.center, true, _cp).distanceTo(sp.center) < sp.radius * 0.95;
+    const goal = block ? 0.22 : 1;
+    const cur = t.userData.fade;
+    if (Math.abs(goal - cur) < 0.005) { if (cur !== goal) setTreeOpacity(t, goal); continue; }
+    setTreeOpacity(t, cur + (goal - cur) * k);
+  }
 }
 function followCamera(pos, k, dt) {
   const desired = new THREE.Vector3(pos.x * k, 0.6, pos.z * k);
@@ -1718,6 +1746,7 @@ function animate() {
   }
 
   controls.update();
+  if (mode === 'park') updateTreeFade(dt);
   renderer.render(scene, camera);
 }
 

@@ -353,6 +353,10 @@ export function buildPark() {
     t.rotation.y = Math.random() * 6;
     t.scale.setScalar(0.8 + Math.random() * 0.6);
     scene.add(t);
+    // カメラとの重なり判定用の外接球（scale 反映後に計算）
+    t.updateMatrixWorld(true);
+    t.userData.sphere = new THREE.Box3().setFromObject(t).getBoundingSphere(new THREE.Sphere());
+    t.userData.fade = 1;
     trees.push(t);
   }
 
@@ -420,7 +424,7 @@ export function buildPark() {
   scene.add(dir.target);
 
   return {
-    scene, ground, dir,
+    scene, ground, dir, trees,
     bounds: { radius: R - 1 },
     obstacles: [[4.2, -3.2, 3.4], ...treeSpots.map(([x, z]) => [x, z, 0.7])],
     setTimeOfDay(hour) {
