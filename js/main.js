@@ -1360,7 +1360,7 @@ function updateTreeFade(dt) {
   for (const t of park.trees) {
     const sp = t.userData.sphere;
     const block = _seg.closestPointToPoint(sp.center, true, _cp).distanceTo(sp.center) < sp.radius * 0.95;
-    const goal = block ? 0.22 : 1;
+    const goal = block ? 0.1 : 1;
     const cur = t.userData.fade;
     if (Math.abs(goal - cur) < 0.005) { if (cur !== goal) setTreeOpacity(t, goal); continue; }
     setTreeOpacity(t, cur + (goal - cur) * k);
