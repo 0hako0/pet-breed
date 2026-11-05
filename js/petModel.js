@@ -708,60 +708,39 @@ export class PetModel {
       this.tongue = tongue;
     }
 
-    // 目（大きめ・うるうる）
-    this.eyes = []; this.eyeOpenG = []; this.eyeHappy = []; this.eyeRelax = []; this.brows = []; this.pupils = [];
-    const big = b.bigEyes ? 1.15 : 1;
-    const eyeR = R * (this.isCat ? 0.175 : 0.155) * big;
+    // 目（漫画風: 黒い輪郭・アーモンド形・色つきの瞳・大きな黒目と白い光）
+    // Canvas に描いた目を顔の表面に貼る。表情が変わったときだけ描き直す
+    this.eyes = []; this.eyePlanes = [];
+    const big = b.bigEyes ? 1.12 : 1;
+    const eyeR = R * (this.isCat ? 0.2 : 0.18) * big;
     this.eyeR = eyeR;
-    // 犬はほぼ黒のつぶらな目、猫は色を少しやわらげる
-    const irisCol = b.coloredIris ? '#' + new THREE.Color(col.eye).lerp(new THREE.Color('#fff6e0'), 0.18).getHexString() : '#24160c';
-    const lineMat = mat('#2a1a12', { roughness: 0.6 });
-    const white = new THREE.MeshBasicMaterial({ color: 0xffffff });
+    this.irisCol = b.coloredIris ? col.eye : '#6b4426';
     for (const s of [-1, 1]) {
       const eg = new THREE.Group();
-      const ex = this.isCat ? 0.41 : 0.4, ey = this.isCat ? 0.0 : 0.06;
+      const ex = this.isCat ? 0.42 : 0.4, ey = this.isCat ? 0.02 : 0.08;
       const ez = Math.sqrt(Math.max(0.05, 1 - ex * ex - ey * ey));
-      const rr = R + headFur * 0.95;
+      // 毛の層より外に出して、毛が目にかぶらないように
+      const rr = R + headFur * 1.25 + R * 0.02;
       eg.position.set(s * ex * rr * hs.x, ey * rr * hs.y, ez * rr * hs.z * 0.97);
-      eg.lookAt(eg.position.clone().multiply(new THREE.Vector3(1.2, 0.6, 1)).add(new THREE.Vector3(0, 0, R * 2)));
-      const open = new THREE.Group();
-      eg.add(open);
-      const iris = new THREE.Mesh(new THREE.SphereGeometry(eyeR, 18, 14), mat(irisCol, { roughness: 0.12 }));
-      iris.scale.z = 0.5;
-      open.add(iris);
-      const pupil = new THREE.Mesh(new THREE.SphereGeometry(eyeR, 16, 12), mat('#050505', { roughness: 0.1 }));
-      pupil.userData.base = this.isCat ? new THREE.Vector3(0.62, 0.82, 0.3) : new THREE.Vector3(0.74, 0.74, 0.3);
-      pupil.scale.copy(pupil.userData.base);
-      pupil.position.z = eyeR * 0.28;
-      open.add(pupil);
-      this.pupils.push(pupil);
-      // ハイライト（大・小）でうるうるに
-      const hl = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.36, 10, 8), white);
-      hl.position.set(-eyeR * 0.28, eyeR * 0.32, eyeR * 0.52);
-      open.add(hl);
-      const hl2 = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.17, 8, 6), white);
-      hl2.position.set(eyeR * 0.3, -eyeR * 0.3, eyeR * 0.5);
-      open.add(hl2);
-      // にっこり目（∩）・とじた目（∪）
-      const happy = new THREE.Mesh(new THREE.TorusGeometry(eyeR * 0.72, eyeR * 0.15, 6, 20, Math.PI), lineMat);
-      happy.position.set(0, -eyeR * 0.3, eyeR * 0.3);
-      happy.visible = false;
-      eg.add(happy);
-      const relax = new THREE.Mesh(new THREE.TorusGeometry(eyeR * 0.72, eyeR * 0.14, 6, 20, Math.PI), lineMat);
-      relax.rotation.z = Math.PI;
-      relax.position.set(0, eyeR * 0.2, eyeR * 0.3);
-      relax.visible = false;
-      eg.add(relax);
-      // まゆ（かなしい・おこる時だけ）
-      const brow = new THREE.Mesh(new THREE.CapsuleGeometry(eyeR * 0.15, eyeR * 0.75, 3, 8), mat(shade(col.head, -0.45)));
-      brow.position.set(0, eyeR * 1.35, eyeR * 0.2);
-      brow.visible = false;
-      brow.userData.side = s;
-      eg.add(brow);
+      eg.lookAt(eg.position.clone().multiply(new THREE.Vector3(1.25, 0.6, 1)).add(new THREE.Vector3(0, 0, R * 2)));
+      const cv = document.createElement('canvas');
+      cv.width = cv.height = 128;
+      const tex = new THREE.CanvasTexture(cv);
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.anisotropy = 4;
+      const pm = new THREE.MeshStandardMaterial({ map: tex, transparent: true, alphaTest: 0.05, roughness: 0.35, emissive: '#ffffff', emissiveMap: tex, emissiveIntensity: 0.22, depthWrite: true });
+      const plane = new THREE.Mesh(new THREE.PlaneGeometry(eyeR * 2.6, eyeR * 2.6), pm);
+      plane.position.z = eyeR * 0.05;
+      plane.userData = { cv, tex, side: s };
+      eg.add(plane);
       eg.userData.side = s;
       this.headGroup.add(eg);
-      this.eyes.push(eg); this.eyeOpenG.push(open); this.eyeHappy.push(happy); this.eyeRelax.push(relax); this.brows.push(brow);
+      this.eyes.push(eg);
+      this.eyePlanes.push(plane);
     }
+    this._eyeKey = '';
+    this.drawEyes(EXPRESSIONS.normal);
+
     // ほっぺ（うれしい時にぽっ）
     this.blushMat = new THREE.MeshBasicMaterial({ color: '#ff8fa3', transparent: true, opacity: 0, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
     for (const s of [-1, 1]) {
@@ -931,6 +910,95 @@ export class PetModel {
     const m = new THREE.Mesh(merged, material);
     m.castShadow = true;
     return m;
+  }
+  // 漫画風の目を Canvas に描く（右目の形で描き、左目は左右反転）
+  drawEyes(E) {
+    const pk = E.pupil || 1;
+    const key = [E.eyes, E.droop || 0, pk, E.mouth === 'open' && E.eyes === 'open' && (E.blush || 0) > 0.3 ? 'smile' : ''].join('|');
+    if (key === this._eyeKey) return;
+    this._eyeKey = key;
+    const cat = this.isCat;
+    const iris = new THREE.Color(this.irisCol);
+    if (cat) iris.offsetHSL(0, 0.2, 0.06); // あざやかに
+    const irisLight = '#' + iris.clone().lerp(new THREE.Color('#ffffff'), cat ? 0.12 : 0.1).getHexString();
+    const irisDark = '#' + iris.clone().multiplyScalar(0.62).getHexString();
+    const W = cat ? 52 : 47, H = cat ? 40 : 44;
+    for (const pl of this.eyePlanes) {
+      const { cv, tex, side } = pl.userData;
+      const g = cv.getContext('2d');
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.clearRect(0, 0, 128, 128);
+      g.translate(64, 64);
+      if (side < 0) g.scale(-1, 1); // 左目は反転（目じりが外側）
+      g.lineCap = 'round'; g.lineJoin = 'round';
+      g.strokeStyle = '#141010';
+      if (E.eyes === 'happy' || E.eyes === 'relax') {
+        // にっこり（∩）/ とじた目（∪）
+        g.lineWidth = 10;
+        g.beginPath();
+        if (E.eyes === 'happy') { g.moveTo(-W * 0.8, 12); g.quadraticCurveTo(0, -H * 0.9, W * 0.8, 8); }
+        else { g.moveTo(-W * 0.8, -4); g.quadraticCurveTo(0, H * 0.7, W * 0.8, -8); }
+        g.stroke();
+        tex.needsUpdate = true;
+        continue;
+      }
+      // アーモンド形（目じり=+x を少し上げる）
+      const shape = () => {
+        g.beginPath();
+        g.moveTo(-W, 6);
+        g.bezierCurveTo(-W * 0.75, -H * 1.25, W * 0.7, -H * 1.3, W, -8);
+        g.bezierCurveTo(W * 0.85, H * 1.15, -W * 0.7, H * 1.2, -W, 6);
+        g.closePath();
+      };
+      g.save();
+      shape();
+      g.clip();
+      // まぶたで切る（ぷんぷん: 目がしらが下がる / しょんぼり: 目じりが下がる / にこにこ: 下からほおが押し上げる）
+      const droop = E.droop || 0;
+      let lid = null;
+      if (droop > 0) lid = [[-W - 4, -H * 0.15], [W + 4, -H * 0.95]];
+      else if (droop < 0) lid = [[-W - 4, -H * 0.95], [W + 4, -H * 0.2]];
+      if (lid) {
+        g.beginPath();
+        g.moveTo(lid[0][0], lid[0][1]); g.lineTo(lid[1][0], lid[1][1]);
+        g.lineTo(W + 10, H + 10); g.lineTo(-W - 10, H + 10); g.closePath();
+        g.clip();
+      }
+      if (key.endsWith('smile')) {
+        g.beginPath();
+        g.moveTo(-W - 10, -H - 10); g.lineTo(W + 10, -H - 10); g.lineTo(W + 10, H * 0.55);
+        g.quadraticCurveTo(0, H * 0.05, -W - 10, H * 0.6); g.closePath();
+        g.clip();
+      }
+      // 瞳（上が少し濃いグラデーション）
+      const gr = g.createLinearGradient(0, -H, 0, H);
+      gr.addColorStop(0, irisDark); gr.addColorStop(0.45, irisLight); gr.addColorStop(1, irisLight);
+      g.fillStyle = gr;
+      g.fillRect(-W - 5, -H - 5, W * 2 + 10, H * 2 + 10);
+      // 黒目
+      const pr = H * (cat ? 0.72 : 0.82) * Math.min(1.25, pk);
+      const pxc = -4, pyc = 4;
+      g.fillStyle = '#0d0a0a';
+      g.beginPath();
+      if (cat && pk < 0.8) g.ellipse(pxc, pyc, pr * 0.45, pr * 1.05, 0, 0, Math.PI * 2);
+      else g.ellipse(pxc, pyc, pr * (cat ? 0.92 : 1), pr, 0, 0, Math.PI * 2);
+      g.fill();
+      // 白い光（大・小）
+      g.fillStyle = '#ffffff';
+      g.beginPath(); g.arc(pxc + pr * 0.32, pyc - pr * 0.38, pr * 0.36, 0, Math.PI * 2); g.fill();
+      g.beginPath(); g.arc(pxc - pr * 0.38, pyc + pr * 0.36, pr * 0.15, 0, Math.PI * 2); g.fill();
+      g.restore();
+      // 輪郭（上まぶたは太く）
+      g.lineWidth = 6;
+      shape();
+      g.stroke();
+      g.lineWidth = 11;
+      g.beginPath();
+      if (lid) { g.moveTo(lid[0][0] * 0.95, lid[0][1]); g.lineTo(lid[1][0] * 0.95, lid[1][1]); }
+      else { g.moveTo(-W, 6); g.bezierCurveTo(-W * 0.75, -H * 1.25, W * 0.7, -H * 1.3, W, -8); }
+      g.stroke();
+      tex.needsUpdate = true;
+    }
   }
   // ω の口
   buildOmega(r, tube, pos) {
@@ -1140,26 +1208,14 @@ export class PetModel {
       if (this.blinkT < -0.12) this.blinkT = 2 + Math.random() * 4;
     }
     const es = E.eyeScale || 1;
-    const openS = Math.max(0.06, Math.min(c.eyeOpen, blink) * es);
+    this.drawEyes(E);
+    const opened = E.eyes === 'open';
+    const openS = opened ? Math.max(0.06, Math.min(c.eyeOpen, blink) * es) : 1;
     const ek = 1 - Math.exp(-dt * 12);
-    this.eyes.forEach((eg, i) => {
-      const s = eg.userData.side;
-      const o = this.eyeOpenG[i];
-      o.visible = E.eyes === 'open';
-      this.eyeHappy[i].visible = E.eyes === 'happy';
-      this.eyeRelax[i].visible = E.eyes === 'relax';
-      o.scale.y = blink < 1 ? openS : o.scale.y + (openS - o.scale.y) * ek;
-      o.scale.x += ((1 + (es - 1) * 0.5) - o.scale.x) * ek;
-      o.rotation.z += ((E.droop || 0) * s * 0.3 - o.rotation.z) * ek;
-      const br = this.brows[i];
-      br.visible = !!E.brow && E.eyes === 'open';
-      br.rotation.z = Math.PI / 2 + (E.brow === 'sad' ? -s : s) * 0.45;
-      const pu = this.pupils[i], pb = pu.userData.base, pk = E.pupil || 1;
-      const tx = this.isCat ? Math.min(0.88, pb.x * pk) : pb.x * Math.min(1.25, pk);
-      const ty = this.isCat ? pb.y : pb.y * Math.min(1.25, pk);
-      pu.scale.x += (tx - pu.scale.x) * ek;
-      pu.scale.y += (ty - pu.scale.y) * ek;
-    });
+    for (const pl of this.eyePlanes) {
+      pl.scale.y = blink < 1 && opened ? openS : pl.scale.y + (openS - pl.scale.y) * ek;
+      pl.scale.x += ((opened ? 1 + (es - 1) * 0.5 : 1) - pl.scale.x) * ek;
+    }
 
     // 口・舌・ほっぺ
     const mouthOpen = E.mouth === 'open' || this.tongueOut;
