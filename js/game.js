@@ -73,6 +73,7 @@ export function defaultSave() {
     lastTime: Date.now(),
     lastDaily: '',
     muted: false,
+    furniture: { owned: [], placed: {} }, // placed: { 家具ID: 置き場所の番号 }
   };
 }
 
@@ -81,6 +82,7 @@ export function load() {
     const raw = localStorage.getItem(SAVE_KEY);
     if (!raw) return defaultSave();
     const s = Object.assign(defaultSave(), JSON.parse(raw));
+    s.furniture = Object.assign({ owned: [], placed: {} }, s.furniture);
     for (const p of s.pets) {
       p.poops = p.poops || [];
       p.treatLog = p.treatLog || [];
@@ -158,4 +160,40 @@ export function ageDays(p) { return Math.floor((Date.now() - p.adoptedAt) / 8640
 export function todayStr() {
   const d = new Date();
   return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+}
+
+// ================= 季節と天気 =================
+export const SEASONS = {
+  spring: { name: '春', icon: '🌸' },
+  summer: { name: '夏', icon: '🌻' },
+  autumn: { name: '秋', icon: '🍁' },
+  winter: { name: '冬', icon: '⛄' },
+};
+export const WEATHERS = {
+  sunny: { name: 'はれ', icon: '☀️' },
+  cloudy: { name: 'くもり', icon: '☁️' },
+  rain: { name: 'あめ', icon: '☔' },
+  snow: { name: 'ゆき', icon: '❄️' },
+};
+export function seasonOf(d = new Date()) {
+  const m = d.getMonth() + 1;
+  if (m >= 3 && m <= 5) return 'spring';
+  if (m >= 6 && m <= 8) return 'summer';
+  if (m >= 9 && m <= 11) return 'autumn';
+  return 'winter';
+}
+// 日付から決まる「今日の天気」（同じ日なら何度開いても同じ）
+const WEATHER_TABLE = {
+  spring: [['sunny', 55], ['cloudy', 25], ['rain', 20]],
+  summer: [['sunny', 60], ['cloudy', 15], ['rain', 25]],
+  autumn: [['sunny', 55], ['cloudy', 25], ['rain', 20]],
+  winter: [['sunny', 40], ['cloudy', 25], ['snow', 35]],
+};
+export function weatherOf(d = new Date(), season = seasonOf(d)) {
+  const key = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`;
+  let h = 2166136261;
+  for (let i = 0; i < key.length; i++) { h ^= key.charCodeAt(i); h = Math.imul(h, 16777619); }
+  let r = ((h >>> 0) % 1000) / 10;
+  for (const [w, pct] of WEATHER_TABLE[season]) { if (r < pct) return w; r -= pct; }
+  return 'sunny';
 }

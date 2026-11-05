@@ -2,7 +2,8 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { DOG_BREEDS, CAT_BREEDS, ALL_BREEDS, getBreed } from './breeds.js';
 import { PetModel, ACCESSORIES } from './petModel.js';
-import { buildRoom, buildPark, makeBall, makeTeaser, makePoop, makeCoin, makeBone, makeFish, makeButterfly, makeBathtub, makeBrush } from './world.js';
+import { buildRoom, buildPark, makeBall, makeTeaser, makePoop, makeCoin, makeBone, makeFish, makeButterfly, makeBathtub, makeBrush, makeFrisbee } from './world.js';
+import { FURNITURE, FURN_SLOTS, makeFurniture } from './furniture.js';
 import * as G from './game.js';
 import { sfx, voice, setMuted, isMuted } from './audio.js';
 
@@ -39,7 +40,8 @@ const room = buildRoom();
 const park = buildPark();
 let mode = 'room';
 let scene = room.scene;
-const ROOM_OBST = [[3.8, 2.2, 0.85], [-4.6, 1.5, 0.55], [2.2, -5.2, 1.1]];
+const ROOM_OBST_BASE = [[3.8, 2.2, 0.85], [-4.6, 1.5, 0.55], [2.2, -5.2, 1.1]];
+const ROOM_OBST = [...ROOM_OBST_BASE]; // 家具を置くと増える
 
 // ================= セーブデータ =================
 let S = G.load();
@@ -163,10 +165,14 @@ function refreshUI() {
 // ================= ペットの動きを制御するコントローラー =================
 class Cancelled extends Error {}
 class Ctrl {
-  constructor() {
+  constructor(pet = null) {
     this.model = null; this.gen = 0; this.timers = []; this.move = null; this.busy = false;
     this.idleT = 2; this.heading = 0; this.targetHeading = 0;
+    this.pet = pet;      // null = いま選んでいる子（curPet）
+    this.tween = null;   // 飛び乗り・飛び降りなどの決まった時間の移動
+    this.perch = null;   // 家具の上にいる時の降り先
   }
+  get petData() { return this.pet || curPet(); }
   get pos() { return this.model.root.position; }
   get scale() { return this.model.root.scale.x; }
   attach(model) { this.model = model; model.root.rotation.y = this.heading; }
@@ -176,7 +182,12 @@ class Ctrl {
     this.timers = [];
     if (this.move && this.move.rej) this.move.rej(new Cancelled());
     this.move = null;
+    if (this.tween && this.tween.rej) this.tween.rej(new Cancelled());
+    this.tween = null;
     if (this.model) this.model.walkSpeed = 0;
+    // 家具の上で中断されたら床に降ろす
+    if (this.perch && this.model) { this.pos.copy(this.perch); this.pos.y = 0; }
+    this.perch = null;
     this.busy = false;
   }
   async run(fn, opt = {}) {
@@ -192,7 +203,7 @@ class Ctrl {
         if (this.model) {
           this.model.walkSpeed = 0;
           this.model.tongueOut = false;
-          if (!opt.keepPose && !curPet()?.sleeping) this.model.setPose('stand');
+          if (!opt.keepPose && !this.petData?.sleeping) this.model.setPose('stand');
         }
         this.idleT = rnd(2, 5);
       }
@@ -214,6 +225,14 @@ class Ctrl {
   setTarget(target, run = false) {
     if (this.move && this.move.res) this.move.res(false);
     this.move = { target: this.clampTarget(target.clone()), run };
+  }
+  // 決まった時間で target（y込み）へ移動。arc > 0 ならジャンプの弧を描く
+  tweenTo(target, dur, arc = 0, walk = 0) {
+    const p = new Promise((res, rej) => {
+      this.tween = { from: this.pos.clone(), to: target.clone(), t: 0, dur, arc, walk, res, rej };
+    });
+    p.catch(() => {});
+    return p;
   }
   stop() {
     if (this.move && this.move.res) this.move.res(false);
@@ -243,7 +262,18 @@ class Ctrl {
     }
     const m = this.model;
     if (!m) return;
-    if (this.move) {
+    if (this.tween) {
+      const tw = this.tween;
+      tw.t += dt;
+      const u = Math.min(1, tw.t / tw.dur);
+      const dx = tw.to.x - tw.from.x, dz = tw.to.z - tw.from.z;
+      this.pos.x = tw.from.x + dx * u;
+      this.pos.z = tw.from.z + dz * u;
+      this.pos.y = THREE.MathUtils.lerp(tw.from.y, tw.to.y, u) + tw.arc * 4 * u * (1 - u);
+      if (Math.hypot(dx, dz) > 0.05) this.targetHeading = Math.atan2(dx, dz);
+      m.walkSpeed = tw.walk;
+      if (u >= 1) { this.tween = null; m.walkSpeed = 0; tw.res(true); }
+    } else if (this.move) {
       const tg = this.move.target;
       const dx = tg.x - this.pos.x, dz = tg.z - this.pos.z;
       const dist = Math.hypot(dx, dz);
@@ -267,6 +297,21 @@ class Ctrl {
     }
     this.heading = angleLerp(this.heading, this.targetHeading, 1 - Math.exp(-dt * 9));
     m.root.rotation.y = this.heading;
+  }
+  // 家具などへ飛び乗る（from: 立つ場所 → to: 乗る場所）
+  async hopUp(from, to) {
+    this.faceTo(to);
+    this.model.setPose('crouch');
+    await this.wait(0.3);
+    this.model.setPose('stand');
+    this.perch = from.clone();
+    await this.tweenTo(to, 0.45, 0.35);
+  }
+  async hopDown(to) {
+    this.model.setPose('stand');
+    const tgt = to.clone(); tgt.y = 0;
+    await this.tweenTo(tgt, 0.45, 0.3);
+    this.perch = null;
   }
 }
 function angleLerp(a, b, t) {
@@ -302,11 +347,8 @@ function spawnModel() {
   model.root.position.copy(pos);
   scene.add(model.root);
   ctrl.attach(model);
-  if (p.sleeping) {
-    model.root.position.copy(room.spots.bed);
-    model.setPose('sleep');
-    model.cur = structuredClone(model.target);
-  }
+  model.root.position.y = 0;
+  if (p.sleeping) placeSleeping(ctrl);
   rebuildPoops();
 }
 
@@ -370,7 +412,7 @@ function ready(allowSleep = false) {
 function wakeUp(byUser) {
   const p = curPet();
   p.sleeping = false;
-  model.root.position.y = 0;
+  leaveBed(ctrl);
   model.setPose('stand');
   room.setTimeOfDay(new Date().getHours(), false);
   if (byUser) {
@@ -383,13 +425,20 @@ function wakeUp(byUser) {
 }
 
 // ================= パネル =================
+let panelOnClose = null; // パネルを閉じたときに一度だけ呼ぶ
 function openPanel(title, html, bind) {
+  panelOnClose = null;
   $('panel-title').textContent = title;
   $('panel-body').innerHTML = html;
   $('panel').classList.remove('hidden');
   if (bind) bind($('panel-body'));
 }
-function closePanel() { $('panel').classList.add('hidden'); }
+function closePanel() {
+  $('panel').classList.add('hidden');
+  const f = panelOnClose;
+  panelOnClose = null;
+  if (f) f();
+}
 $('panel-close').onclick = () => { sfx.click(); closePanel(); };
 $('panel').addEventListener('pointerdown', e => { if (e.target.id === 'panel') closePanel(); });
 
@@ -502,8 +551,13 @@ function openPlay() {
   openPanel('🎾 いっしょにあそぶ', `<div class="grid">
     <div class="item ${dog ? 'like' : ''}"><div class="big">🎾</div><div class="nm">ボールなげ</div><div class="ds">投げたボールを取ってくるよ ${dog ? '<span class="tag">大好き</span>' : ''}</div><button class="btn small primary" data-play="ball">あそぶ</button></div>
     <div class="item ${!dog ? 'like' : ''}"><div class="big">🪶</div><div class="nm">猫じゃらし</div><div class="ds">${IS_TOUCH ? '指でなぞって' : 'マウスで動かして'}追いかけっこ ${!dog ? '<span class="tag">大好き</span>' : ''}</div><button class="btn small primary" data-play="teaser">あそぶ</button></div>
+    <div class="item ${dog ? 'like' : ''}"><div class="big">🥏</div><div class="nm">フリスビー大会</div><div class="ds">公園で10投！キャッチ回数を競おう${p.frisbeeBest ? `<br>ベスト ${p.frisbeeBest}回` : ''}</div><button class="btn small primary" data-play="frisbee">公園へ</button></div>
   </div>`, el => {
-    el.querySelectorAll('[data-play]').forEach(b => b.onclick = () => { closePanel(); b.dataset.play === 'ball' ? playBall() : playTeaser(); });
+    el.querySelectorAll('[data-play]').forEach(b => b.onclick = () => {
+      closePanel();
+      const k = b.dataset.play;
+      if (k === 'ball') playBall(); else if (k === 'teaser') playTeaser(); else startFrisbee();
+    });
   });
 }
 function tiredCheck(need = 10) {
@@ -703,12 +757,11 @@ function toggleSleep() {
 function goToSleep() {
   const p = curPet();
   ctrl.run(async () => {
-    await ctrl.walkTo(room.spots.bed);
-    model.root.position.y = 0.12;
-    model.setPose('sleep');
-    p.sleeping = true;
+    await sleepScript(ctrl);
     room.setTimeOfDay(new Date().getHours(), true);
-    toast(`💤 ${p.name}はおやすみ中…（げんきが回復するよ）`);
+    const where = { doghouse: '自分のおうちで', kotatsu: 'こたつで', cattower: 'タワーのてっぺんで' }[p.sleepAt?.id] || '';
+    const snug = buddies.some(b => b.pet.sleeping) ? '（みんなでいっしょに）' : '';
+    toast(`💤 ${p.name}は${where}おやすみ中…${snug}（げんきが回復するよ）`);
     refreshUI();
   }, { keepPose: true });
 }
@@ -838,7 +891,7 @@ function trainTrick(id, show) {
 let shopTab = 'food';
 function openShop() {
   const p = curPet();
-  const tabs = [['food', '🥣 ごはん'], ['treat', '🍪 おやつ'], ['acc', '🎀 アクセサリー']];
+  const tabs = [['food', '🥣 ごはん'], ['treat', '🍪 おやつ'], ['acc', '🎀 アクセサリー'], ['furn', '🛋️ 家具']];
   let items = '';
   if (shopTab === 'food' || shopTab === 'treat') {
     const src = shopTab === 'food' ? G.FOODS : G.TREATS;
@@ -846,6 +899,12 @@ function openShop() {
       <div class="ds">${shopTab === 'food' ? `おなか+${f.hunger}` : `きげん+${f.mood}`} ${f.like ? `<span class="tag">${f.like === 'dog' ? '犬' : '猫'}が大好き</span>` : ''}</div>
       <div>もっている: ${S.inventory[id] || 0}</div>
       <button class="btn small primary" data-buy="${id}" ${S.coins >= f.price ? '' : 'disabled'}>🪙${f.price} で買う</button></div>`).join('');
+  } else if (shopTab === 'furn') {
+    items = Object.entries(FURNITURE).map(([id, f]) => {
+      const owned = S.furniture.owned.includes(id);
+      return `<div class="item"><div class="big">${f.icon}</div><div class="nm">${f.name}</div><div class="ds">${f.desc}</div>
+      ${owned ? '<button class="btn small" disabled>もっている</button>' : `<button class="btn small primary" data-buyfurn="${id}" ${S.coins >= f.price ? '' : 'disabled'}>🪙${f.price} で買う</button>`}</div>`;
+    }).join('');
   } else {
     items = Object.entries(ACCESSORIES).filter(([, a]) => a.price > 0).map(([id, a]) => {
       const owned = S.owned.includes(id);
@@ -864,6 +923,23 @@ function openShop() {
       S.coins -= f.price;
       S.inventory[id] = (S.inventory[id] || 0) + 1;
       sfx.coin();
+      refreshUI();
+      openShop();
+    });
+    el.querySelectorAll('[data-buyfurn]').forEach(b => b.onclick = () => {
+      const id = b.dataset.buyfurn;
+      const f = FURNITURE[id];
+      if (S.coins < f.price || S.furniture.owned.includes(id)) return;
+      S.coins -= f.price;
+      S.furniture.owned.push(id);
+      sfx.success();
+      const used = Object.values(S.furniture.placed);
+      const free = FURN_SLOTS.findIndex((_, i) => !used.includes(i));
+      if (free >= 0 && mode === 'room') {
+        S.furniture.placed[id] = free;
+        applyFurnitureChange();
+        toast(`${f.icon} ${f.name}を「${FURN_SLOTS[free].name}」に置いたよ！（🛋️ボタンで模様替え）`, 'good');
+      } else toast(`${f.icon} ${f.name}を買った！🛋️ボタンの模様替えで置いてね`, 'good');
       refreshUI();
       openShop();
     });
@@ -966,9 +1042,20 @@ function openPets() {
     <button class="btn small" id="btn-reset">データを消す</button></div>`, el => {
     el.querySelectorAll('[data-sw]').forEach(b => b.onclick = () => {
       if (mode !== 'room' || playState) { toast('おうちにいるときに切り替えられます'); return; }
-      S.active = b.dataset.sw;
+      // いまの位置のまま、お世話する子だけ入れかえる
+      const posMap = {};
+      if (model) posMap[S.active] = model.root.position.clone();
+      for (const x of buddies) posMap[x.pet.id] = x.model.root.position.clone();
+      const next = b.dataset.sw;
+      const nextPos = posMap[next];
+      for (const x of buddies) { x.ctrl.cancel(); }
+      ctrl.cancel();
+      spotUse.clear();
+      S.active = next;
       closePanel();
+      if (model && nextPos) model.root.position.copy(nextPos);
       spawnModel();
+      spawnBuddies(posMap);
       refreshUI();
       speak();
       emit('💖', petTop(), 4);
@@ -1003,6 +1090,7 @@ function openAdopt(first) {
   $('actions').classList.add('hidden');
   if (model) model.root.visible = false;
   poopGroup.visible = false;
+  setBuddiesVisible(false);
   renderBreedList();
   selectBreed(adoptState.breed);
   $('adopt-name').value = pick(NAMES.dog);
@@ -1052,6 +1140,7 @@ $('btn-adopt').onclick = () => {
   spawnModel();
   model.root.position.copy(room.spots.center);
   ctrl.heading = 0;
+  spawnBuddies();
   showGameUI();
   refreshUI();
   G.save(S);
@@ -1069,12 +1158,872 @@ function closeAdopt() {
   $('adopt').classList.add('hidden');
   if (model) model.root.visible = true;
   poopGroup.visible = true;
+  setBuddiesVisible(true);
   if (S.pets.length) $('actions').classList.remove('hidden');
 }
 function showGameUI() {
   $('status').classList.remove('hidden');
   $('topright').classList.remove('hidden');
   $('actions').classList.remove('hidden');
+}
+
+// ================= 季節と天気 =================
+// ?season=winter&weather=snow のように URL で指定すると、その季節・天気を試せる
+const urlQ = new URLSearchParams(location.search);
+let season = 'spring', weather = 'sunny', weatherDay = '';
+const SEASON_MSG = { spring: '公園の桜が満開！', summer: '緑がまぶしい季節', autumn: '公園は落ち葉でいっぱい', winter: '空気がつめたい季節' };
+const WEATHER_MSG = {
+  sunny: 'おさんぽ日和！', cloudy: 'すずしくてすごしやすいね',
+  rain: '雨の日はおうちでゴロゴロ。おさんぽするとどろんこに…', snow: '雪がつもったよ！犬は大はしゃぎ、ねこはぬくぬくしたい',
+};
+function updateWeather(force = false) {
+  const day = G.todayStr();
+  if (!force && day === weatherDay) return false;
+  weatherDay = day;
+  season = G.SEASONS[urlQ.get('season')] ? urlQ.get('season') : G.seasonOf();
+  weather = G.WEATHERS[urlQ.get('weather')] ? urlQ.get('weather') : G.weatherOf(new Date(), season);
+  room.setWeather(weather, season);
+  park.setWeather(weather, season);
+  $('weather').textContent = G.SEASONS[season].icon + G.WEATHERS[weather].icon;
+  $('weather').title = `${G.SEASONS[season].name}・${G.WEATHERS[weather].name}`;
+  return true;
+}
+function weatherToast() {
+  toast(`${G.SEASONS[season].icon}${G.SEASONS[season].name}・${G.WEATHERS[weather].icon}${G.WEATHERS[weather].name}：${weather === 'sunny' || weather === 'cloudy' ? SEASON_MSG[season] + ' ' : ''}${WEATHER_MSG[weather]}`);
+}
+const seasonIcon = () => ({ spring: '🌸', summer: '🌻', autumn: '🍂', winter: '⛄' })[season];
+
+// 部屋での天気・季節ごとのしぐさ（なければ null）
+function weatherIdle(c) {
+  const p = c.petData, cat = p.species === 'cat', m = c.model;
+  const atWindow = async (pose, ch, sec) => {
+    await c.walkTo(room.windowSpot);
+    c.faceTo(new THREE.Vector3(room.windowSpot.x, 0, -9));
+    m.setPose(pose);
+    say(c, ch);
+    await c.wait(sec);
+  };
+  if (weather === 'rain' && Math.random() < 0.45) {
+    if (Math.random() < 0.5) return async () => {
+      m.setPose('down'); say(c, '☔');
+      await c.wait(rnd(3, 5));
+      m.play('roll', 1.3); say(c, '💤');
+      await c.wait(rnd(3, 5));
+    };
+    return () => atWindow('sit', '🌧️', rnd(3, 5));
+  }
+  if (weather === 'snow' && Math.random() < 0.45) {
+    if (!cat) return async () => { await atWindow('happy', '❄️', 1); m.play('hop', 0.9); m.wagAmp = 1; await c.wait(2); };
+    const k = furn('kotatsu');
+    if (k) return () => useFurniture(c, k);
+    return async () => { m.setPose('sleep'); say(c, '🥶'); await c.wait(rnd(5, 8)); };
+  }
+  if (weather !== 'rain' && weather !== 'snow' && Math.random() < 0.15) {
+    if (season === 'summer') return async () => { m.setPose('down'); say(c, '💦'); await c.wait(rnd(4, 6)); };
+    return () => atWindow('sit', seasonIcon(), rnd(3, 5));
+  }
+  return null;
+}
+// ペットのふきだし（いまの子はふきだし、ほかの子は絵文字を出す）
+function say(c, ch) {
+  if (c === ctrl) bubble(ch);
+  else if (c.model) emit(ch, c.model.headWorldPos().add(new THREE.Vector3(0, 0.35, 0)), 1, { up: 0.3, size: 0.32, spread: 0, life: 1.6 });
+}
+
+// ================= 家具（模様替え） =================
+const furnGroup = new THREE.Group();
+room.scene.add(furnGroup);
+let placedFurn = [];        // { id, def, obj, slot, spots: [{ pos, heading, i }], approach, center }
+const spotUse = new Map();  // 'sofa:0' などの使用中の場所 → Ctrl
+const furn = id => placedFurn.find(f => f.id === id);
+function rebuildFurniture() {
+  for (const f of placedFurn) furnGroup.remove(f.obj);
+  placedFurn = [];
+  ROOM_OBST.length = 0;
+  ROOM_OBST.push(...ROOM_OBST_BASE);
+  for (const [id, si] of Object.entries(S.furniture.placed)) {
+    const def = FURNITURE[id], slot = FURN_SLOTS[si];
+    if (!def || !slot) continue;
+    const obj = makeFurniture(id);
+    obj.position.set(slot.x, 0, slot.z);
+    obj.rotation.y = slot.ry;
+    obj.updateMatrixWorld(true);
+    furnGroup.add(obj);
+    const center = obj.position.clone();
+    const spots = def.spots.map((sp, i) => {
+      const pos = obj.localToWorld(new THREE.Vector3(...sp.p));
+      let heading = slot.ry;
+      if (sp.face === 'in') heading = slot.ry + Math.PI;
+      if (sp.face === 'side') heading = Math.atan2(pos.x - center.x, pos.z - center.z);
+      return { pos, heading, i };
+    });
+    const approach = def.approach ? obj.localToWorld(new THREE.Vector3(...def.approach)) : null;
+    placedFurn.push({ id, def, obj, slot: si, spots, approach, center });
+    if (def.r > 0) ROOM_OBST.push([slot.x, slot.z, def.r]);
+  }
+}
+const spotKey = (id, i) => id + ':' + i;
+function takeSpot(id, i, c) {
+  const k = spotKey(id, i);
+  if (spotUse.has(k) && spotUse.get(k) !== c) return false;
+  spotUse.set(k, c);
+  return true;
+}
+function freeSpot(id, i, c) { const k = spotKey(id, i); if (spotUse.get(k) === c) spotUse.delete(k); }
+function freeSpots(f, c, list = f.spots.map(s => s.i)) { return list.filter(i => !spotUse.has(spotKey(f.id, i)) || spotUse.get(spotKey(f.id, i)) === c); }
+
+// 家具を使うしぐさ。使えたら true
+async function useFurniture(c, f) {
+  const p = c.petData, cat = p.species === 'cat', m = c.model;
+  const winter = season === 'winter';
+  const held = [];
+  const hold = i => { if (takeSpot(f.id, i, c)) { held.push(i); return true; } return false; };
+  const relax = async (sec, ch) => {
+    if (ch) say(c, ch);
+    await c.wait(sec);
+    G.applyStats(p, { mood: 3, energy: 2 });
+  };
+  try {
+    switch (f.id) {
+      case 'cushion': {
+        if (!hold(0)) return false;
+        const sp = f.spots[0];
+        await c.walkTo(sp.pos);
+        c.targetHeading = sp.heading + rnd(-0.8, 0.8);
+        await c.tweenTo(sp.pos, 0.2, 0.05);
+        m.setPose(cat && Math.random() < 0.5 ? 'sleep' : 'down');
+        await relax(rnd(5, 9), '😌');
+        await c.tweenTo(sp.pos.clone().setY(0), 0.2);
+        break;
+      }
+      case 'sofa': {
+        const free = freeSpots(f, c);
+        if (!free.length) return false;
+        const sp = f.spots[pick(free)];
+        hold(sp.i);
+        await c.walkTo(f.approach);
+        await c.hopUp(f.approach, sp.pos);
+        c.targetHeading = sp.heading;
+        m.setPose(cat && Math.random() < 0.5 ? 'sleep' : 'down');
+        await relax(rnd(5, 9), '😌');
+        await c.hopDown(f.approach);
+        break;
+      }
+      case 'cattower': {
+        await c.walkTo(f.approach);
+        if (!cat) {
+          c.faceTo(f.spots[1].pos);
+          m.setPose(Math.random() < 0.5 ? 'tilt' : 'beg');
+          say(c, '❓');
+          await c.wait(2);
+          break;
+        }
+        const top = hold(1);
+        if (!top && !hold(0)) return false;
+        await c.hopUp(f.approach, f.spots[0].pos);
+        if (top) { await c.wait(0.4); await c.tweenTo(f.spots[1].pos, 0.45, 0.3); }
+        c.targetHeading = f.spots[top ? 1 : 0].heading;
+        m.setPose(Math.random() < 0.5 ? 'sit' : 'down');
+        await relax(rnd(6, 10), top ? '😼' : '🎵');
+        if (top) await c.tweenTo(f.spots[0].pos, 0.4, 0.2);
+        await c.hopDown(f.approach);
+        break;
+      }
+      case 'doghouse': {
+        if (cat) {
+          if (!hold(1)) return false;
+          await c.walkTo(f.approach);
+          await c.hopUp(f.approach, f.spots[1].pos);
+          c.targetHeading = f.spots[1].heading;
+          m.setPose('sit');
+          await relax(rnd(5, 8), '😺');
+          await c.hopDown(f.approach);
+        } else {
+          if (!hold(0)) return false;
+          await c.walkTo(f.approach);
+          c.perch = f.approach.clone();
+          await c.tweenTo(f.spots[0].pos, 0.8, 0, 0.75);
+          c.targetHeading = f.spots[0].heading;
+          m.setPose('down');
+          await relax(rnd(6, 10), '🏠');
+          await c.tweenTo(f.approach.clone().setY(0), 0.8, 0, 0.75);
+          c.perch = null;
+        }
+        break;
+      }
+      case 'fishbowl': {
+        if (!hold(0)) return false;
+        await c.walkTo(f.spots[0].pos);
+        c.faceTo(f.center);
+        if (cat) {
+          m.setPose('sit'); await c.wait(1.5);
+          m.setPose('paw'); say(c, '🐟'); await c.wait(0.8);
+          m.setPose('crouch'); await c.wait(1.2);
+          m.setPose('paw'); await c.wait(0.6);
+          m.setPose('sit');
+          await relax(1.5);
+        } else {
+          m.setPose('tilt'); say(c, '❓');
+          await relax(2);
+        }
+        break;
+      }
+      case 'kotatsu': {
+        const free = freeSpots(f, c);
+        if (!free.length) return false;
+        const sp = f.spots[pick(free)];
+        hold(sp.i);
+        await c.walkTo(sp.pos);
+        c.targetHeading = sp.heading;
+        m.setPose(cat || Math.random() < 0.3 ? 'sleep' : 'down');
+        say(c, winter ? '♨️' : '😌');
+        await c.wait(winter ? rnd(8, 14) : rnd(4, 7));
+        G.applyStats(p, { mood: winter ? 6 : 3, energy: 4 });
+        break;
+      }
+      default: return false;
+    }
+  } finally {
+    for (const i of held) freeSpot(f.id, i, c);
+  }
+  return true;
+}
+// その子が好きな家具を選ぶ
+function pickFurnitureFor(p) {
+  const cat = p.species === 'cat', winter = season === 'winter';
+  const w = cat
+    ? { cattower: 3, kotatsu: winter ? 5 : 2, cushion: 2, sofa: 2, fishbowl: 3, doghouse: 1 }
+    : { doghouse: 3, sofa: 2, cushion: 2, kotatsu: winter ? 3 : 1, fishbowl: 1, cattower: 1 };
+  const list = placedFurn.filter(f => w[f.id]);
+  if (!list.length) return null;
+  let r = Math.random() * list.reduce((a, f) => a + w[f.id], 0);
+  for (const f of list) { r -= w[f.id]; if (r <= 0) return f; }
+  return list[0];
+}
+
+// ----- ねる場所（ベッド2か所・いぬごや・こたつ・キャットタワー） -----
+const BED_SPOTS = [
+  { pos: new THREE.Vector3(-3.85, 0.12, -3.3), heading: 0.9 },
+  { pos: new THREE.Vector3(-3.3, 0.12, -3.55), heading: -0.3 },
+];
+function chooseSleepAt(c) {
+  const p = c.petData, cat = p.species === 'cat';
+  const ok = (id, i) => !spotUse.has(spotKey(id, i)) || spotUse.get(spotKey(id, i)) === c;
+  const dh = furn('doghouse'), kt = furn('kotatsu'), ct = furn('cattower');
+  if (!cat && dh && ok('doghouse', 0)) return { id: 'doghouse', i: 0 };
+  if (cat && kt && (season === 'winter' || Math.random() < 0.4)) {
+    const free = freeSpots(kt, c);
+    if (free.length) return { id: 'kotatsu', i: pick(free) };
+  }
+  if (cat && ct && Math.random() < 0.5 && ok('cattower', 1)) return { id: 'cattower', i: 1 };
+  for (let i = 0; i < BED_SPOTS.length; i++) if (ok('bed', i)) return { id: 'bed', i };
+  // ベッドがいっぱいならベッドのそばの床でよりそって寝る
+  const a = Math.random() * Math.PI * 2;
+  return { id: 'floor', i: 0, x: -3.5 + Math.cos(a) * 1.25, z: -3.2 + Math.abs(Math.sin(a)) * 1.25 };
+}
+// 寝る場所の位置・向き・起きたときの降り先
+function placeOf(at) {
+  if (at?.id === 'bed') return { ...BED_SPOTS[at.i], exit: null };
+  if (at?.id === 'floor') return { pos: new THREE.Vector3(at.x, 0, at.z), heading: rnd(-1, 1), exit: null };
+  const f = at && furn(at.id);
+  if (f && f.spots[at.i]) return { pos: f.spots[at.i].pos, heading: f.spots[at.i].heading, exit: f.approach };
+  return { ...BED_SPOTS[0], exit: null };
+}
+async function sleepScript(c) {
+  const p = c.petData, m = c.model;
+  const at = chooseSleepAt(c);
+  if (at.id !== 'floor') takeSpot(at.id, at.i, c);
+  const pl = placeOf(at);
+  const f = furn(at.id);
+  if (at.id === 'doghouse') {
+    await c.walkTo(f.approach);
+    await c.tweenTo(pl.pos, 0.8, 0, 0.75);
+  } else if (at.id === 'cattower') {
+    await c.walkTo(f.approach);
+    await c.hopUp(f.approach, f.spots[0].pos);
+    await c.tweenTo(pl.pos, 0.45, 0.3);
+    c.perch = null;
+  } else {
+    await c.walkTo(pl.pos.clone().setY(0));
+    c.pos.y = pl.pos.y;
+  }
+  c.targetHeading = pl.heading;
+  m.setPose('sleep');
+  p.sleeping = true;
+  p.sleepAt = at;
+}
+// 寝ている子をその場所に置く（読み込み時・模様替えのあと）
+function placeSleeping(c) {
+  const p = c.petData;
+  let at = p.sleepAt;
+  const valid = at && (at.id === 'bed' || at.id === 'floor' || (furn(at.id) && furn(at.id).spots[at.i])) && (at.id === 'floor' || !spotUse.has(spotKey(at.id, at.i)) || spotUse.get(spotKey(at.id, at.i)) === c);
+  if (!valid) {
+    at = null;
+    for (let i = 0; i < BED_SPOTS.length; i++) if (!spotUse.has(spotKey('bed', i))) { at = { id: 'bed', i }; break; }
+    if (!at) at = { id: 'floor', i: 0, x: -3.5 + rnd(-1, 1), z: -2.0 };
+  }
+  if (at.id !== 'floor') takeSpot(at.id, at.i, c);
+  p.sleepAt = at;
+  const pl = placeOf(at);
+  c.pos.copy(pl.pos);
+  c.heading = c.targetHeading = pl.heading;
+  c.model.root.rotation.y = pl.heading;
+  c.model.setPose('sleep');
+  c.model.cur = structuredClone(c.model.target);
+}
+// 起こす（いぬごや・タワーからは外に出す）
+function leaveBed(c) {
+  const p = c.petData;
+  const at = p.sleepAt;
+  if (at) {
+    const pl = placeOf(at);
+    if (pl.exit) c.pos.copy(pl.exit);
+    if (at.id !== 'floor') freeSpot(at.id, at.i, c);
+  }
+  c.pos.y = 0;
+  p.sleepAt = null;
+}
+
+// ----- 模様替えパネル -----
+function openRoomEdit() {
+  if (mode !== 'room' || playState || adoptState) { toast('おうちにいるときに模様替えできます'); return; }
+  const owned = S.furniture.owned;
+  const slotOf = id => S.furniture.placed[id];
+  const rows = owned.map(id => {
+    const d = FURNITURE[id];
+    const cur = slotOf(id);
+    const btns = FURN_SLOTS.map((sl, i) => `<button class="btn small ${cur === i ? 'active primary' : ''}" data-place="${id}:${i}">${sl.name}</button>`).join('');
+    return `<div class="furn-row"><div class="furn-head"><span class="big">${d.icon}</span><div><b>${d.name}</b><div class="ds">${d.desc}</div></div>
+      <span class="tag">${cur === undefined ? 'しまってある' : FURN_SLOTS[cur].name}</span></div>
+      <div class="sub-tabs">${btns}${cur === undefined ? '' : `<button class="btn small" data-store="${id}">しまう</button>`}</div></div>`;
+  }).join('');
+  openPanel('🛋️ お部屋の模様替え', `<div class="hint">家具はショップの「家具」で買えます。置き場所をえらぶと、そこに置きます（ほかの家具があれば入れかえ）。ペットは家具ごとにちがう反応をするよ。</div>
+    ${rows || '<div class="hint">まだ家具を持っていません。</div>'}
+    <div style="display:flex;justify-content:flex-end;margin-top:8px"><button class="btn primary" id="btn-furn-shop">🛒 家具を買いに行く</button></div>`, el => {
+    el.querySelectorAll('[data-place]').forEach(b => b.onclick = () => {
+      const [id, si] = b.dataset.place.split(':');
+      const slot = +si;
+      const other = Object.keys(S.furniture.placed).find(k => S.furniture.placed[k] === slot && k !== id);
+      const prev = S.furniture.placed[id];
+      if (other) { if (prev === undefined) delete S.furniture.placed[other]; else S.furniture.placed[other] = prev; }
+      S.furniture.placed[id] = slot;
+      sfx.pop();
+      applyFurnitureChange();
+      openRoomEdit();
+    });
+    el.querySelectorAll('[data-store]').forEach(b => b.onclick = () => {
+      delete S.furniture.placed[b.dataset.store];
+      sfx.click();
+      applyFurnitureChange();
+      openRoomEdit();
+    });
+    el.querySelector('#btn-furn-shop').onclick = () => { shopTab = 'furn'; sfx.click(); openShop(); };
+  });
+}
+function applyFurnitureChange() {
+  const all = [ctrl, ...buddies.map(b => b.ctrl)];
+  for (const c of all) c.cancel();
+  rebuildFurniture();
+  spotUse.clear();
+  for (const c of all) {
+    if (!c.model) continue;
+    if (c.petData?.sleeping) placeSleeping(c);
+    else { c.pos.y = 0; pushOut(c.pos, ROOM_OBST); c.model.setPose('stand'); }
+  }
+  G.save(S);
+}
+
+// ================= 多頭飼い: いっしょに暮らす子たち =================
+const buddies = []; // { pet, model, ctrl, lookAt, zzz }
+function spawnBuddies(posMap = {}) {
+  for (const b of buddies) {
+    b.ctrl.cancel();
+    for (const [k, v] of spotUse) if (v === b.ctrl) spotUse.delete(k);
+    room.scene.remove(b.model.root);
+    b.model.dispose();
+  }
+  buddies.length = 0;
+  for (const p of S.pets) {
+    if (p.id === S.active) continue;
+    const m = new PetModel(getBreed(p.breedId), { equip: p.equip, growth: G.growthFor(p.level), seedKey: p.id });
+    const c = new Ctrl(p);
+    c.attach(m);
+    m.root.position.copy(posMap[p.id] || randomRoomPoint());
+    m.root.position.y = 0;
+    c.heading = c.targetHeading = rnd(-Math.PI, Math.PI);
+    room.scene.add(m.root);
+    c.idleT = rnd(1, 4);
+    if (p.sleeping) placeSleeping(c);
+    m.root.visible = !adoptState;
+    buddies.push({ pet: p, model: m, ctrl: c, lookAt: null, zzz: rnd(0, 1.6) });
+  }
+}
+function voiceOf(p) { const b = getBreed(p.breedId); voice(p.species === 'cat', p.species === 'dog' && b.size < 0.8); }
+function updateBuddies(dt) {
+  for (const b of buddies) {
+    const c = b.ctrl, m = b.model, p = b.pet;
+    c.update(dt);
+    const baseWag = p.species === 'cat' ? 0.25 : 0.12 + (p.stats.mood / 100) * 0.45;
+    m.wagAmp += (baseWag - m.wagAmp) * Math.min(1, dt * 0.8);
+    m.lookTarget = m.walkSpeed < 0.05 && !p.sleeping ? (b.lookAt || camera.position) : null;
+    m.tongueOut = p.species === 'dog' && (m.walkSpeed > 1 || m.poseName === 'happy');
+    m.update(dt);
+    if (p.sleeping) {
+      b.zzz += dt;
+      if (b.zzz > 2.2) { b.zzz = 0; emit('💤', m.headWorldPos().add(new THREE.Vector3(0, 0.3, 0)), 1, { up: 0.35, size: 0.26, spread: 0.05, life: 2 }); }
+    } else buddyAI(b, dt);
+  }
+}
+let interactCD = 8; // 交流のクールダウン（秒）
+function buddyAI(b, dt) {
+  const c = b.ctrl, p = b.pet;
+  if (c.busy) return;
+  c.idleT -= dt;
+  if (c.idleT > 0) return;
+  if (p.stats.energy < 20) { c.run(() => sleepScript(c), { keepPose: true }); return; }
+  const act = curPet();
+  // いまの子が寝ていたら、となりでいっしょに寝ることも
+  if (act?.sleeping && p.stats.energy < 92 && Math.random() < 0.3) { c.run(() => sleepScript(c), { keepPose: true }); return; }
+  if (canInteract(b) && Math.random() < 0.35) { startInteraction(b); return; }
+  const wfx = weatherIdle(c);
+  if (wfx) { c.run(wfx); return; }
+  if (placedFurn.length && Math.random() < 0.35) {
+    const f = pickFurnitureFor(p);
+    if (f) { c.run(async () => { if (!(await useFurniture(c, f))) await c.wait(1); }); return; }
+  }
+  const r = Math.random();
+  c.run(async () => {
+    if (r < 0.45) {
+      await c.walkTo(randomRoomPoint());
+      if (Math.random() < 0.4) { c.model.setPose('eat'); await c.wait(rnd(1, 2)); }
+    } else if (r < 0.65) {
+      c.faceTo(camera.position); c.model.setPose('sit'); await c.wait(rnd(3, 6));
+    } else if (r < 0.8) {
+      c.model.setPose('down'); await c.wait(rnd(4, 8));
+    } else if (model) {
+      c.faceTo(ctrl.pos); c.model.setPose('sit');
+      b.lookAt = model.headWorldPos();
+      await c.wait(rnd(2, 4));
+      b.lookAt = null;
+    }
+  });
+}
+function canInteract(b) {
+  const act = curPet();
+  return interactCD <= 0 && model && act && mode === 'room' && !playState && !adoptState && !act.sleeping && !ctrl.busy
+    && act.stats.energy > 15 && b && !b.pet.sleeping && !b.ctrl.busy && b.pet.stats.energy > 15;
+}
+// 2匹がそろうまで待つ（どちらかが別の行動で中断されたら false）
+async function meetUp(cA, cB, gA, gB, ready) {
+  for (let t = 0; t < 6; t += 0.1) {
+    if (cA.gen !== gA || cB.gen !== gB) return false;
+    if (ready()) return true;
+    await cA.wait(0.1);
+  }
+  return false;
+}
+function startInteraction(b) {
+  interactCD = rnd(18, 30);
+  const A = curPet(), B = b.pet;
+  const cA = ctrl, cB = b.ctrl;
+  const catDog = A.species !== B.species;
+  const r = Math.random();
+  let kind = r < 0.35 ? 'play' : r < 0.6 ? 'chase' : r < 0.82 ? 'greet' : 'nap';
+  if (catDog && kind === 'play' && Math.random() < 0.4) kind = 'hiss';
+  // 待ち合わせ場所
+  const mid = cA.pos.clone().add(cB.pos).multiplyScalar(0.5);
+  const toB = cB.pos.clone().sub(cA.pos).setY(0);
+  if (toB.lengthSq() < 1e-4) toB.set(1, 0, 0);
+  toB.normalize();
+  const gap = 0.35 + (cA.scale + cB.scale) * 0.32;
+  const pA = cA.clampTarget(mid.clone().addScaledVector(toB, -gap / 2));
+  const pB = cB.clampTarget(mid.clone().addScaledVector(toB, gap / 2));
+  const st = { a: false, b: false };
+  const names = `${A.name}と${B.name}`;
+  if (kind === 'greet') {
+    const part = (c, me, other, key, gMe, gOther, pet) => async g => {
+      await c.walkTo(me);
+      st[key] = true;
+      if (!(await meetUp(c, other, c.gen, gOther(), () => st.a && st.b))) return;
+      c.faceTo(other.pos);
+      c.model.setPose('eat');
+      await c.wait(1.2);
+      c.model.setPose('happy');
+      if (key === 'a') { emit('💕', mid.clone().setY(0.7), 3); toast(`🐾 ${names}がごあいさつ`); voiceOf(pet); }
+      G.applyStats(pet, { mood: 4 });
+      await c.wait(1.2);
+    };
+    let gA0, gB0;
+    cA.run(part(cA, pA, cB, 'a', null, () => gB0, A)); gA0 = cA.gen;
+    cB.run(part(cB, pB, cA, 'b', null, () => gA0, B)); gB0 = cB.gen;
+    return;
+  }
+  if (kind === 'play' || kind === 'hiss') {
+    const dogC = A.species === 'dog' ? cA : cB, catC = dogC === cA ? cB : cA;
+    let gA0, gB0;
+    const part = (c, me, other, key, gOther, pet) => async () => {
+      await c.walkTo(me, true);
+      st[key] = true;
+      if (!(await meetUp(c, other, c.gen, gOther(), () => st.a && st.b))) return;
+      c.faceTo(other.pos);
+      if (kind === 'hiss') {
+        if (c === catC) {
+          c.model.setPose('angry'); say(c, '💢');
+          if (key === 'a' || c === cB) sfx.hiss();
+          toast(`😾 ${catC.petData.name}は${dogC.petData.name}にちょっとツンツン`);
+          await c.wait(1.8);
+        } else {
+          c.model.setPose('happy'); c.model.wagAmp = 1;
+          await c.wait(1.2);
+          c.model.setPose('sad');
+          await c.wait(1);
+          await c.walkTo(c.clampTarget(c.pos.clone().addScaledVector(c.pos.clone().sub(other.pos).setY(0).normalize(), 1.6)));
+        }
+        return;
+      }
+      // じゃれあい: プレイバウ → とびつく、を交代で
+      for (let k = 0; k < 3; k++) {
+        const lead = (k % 2 === 0) === (key === 'a');
+        c.faceTo(other.pos);
+        if (lead) { c.model.setPose('bow'); c.model.wagAmp = 1; await c.wait(0.6); c.model.setPose('stand'); c.model.play('hop', 0.6); }
+        else { c.model.setPose('crouch'); await c.wait(0.5); c.model.play('pounce', 0.5); c.model.setPose('stand'); }
+        if (key === 'a') { emit('✨', mid.clone().setY(0.5), 2, { size: 0.22 }); sfx.pop(); }
+        await c.wait(0.6);
+      }
+      // くるくる追いかけあう
+      for (let k = 1; k <= 3; k++) {
+        const ang = Math.atan2(me.x - mid.x, me.z - mid.z) + k * Math.PI / 2;
+        const tgt = c.clampTarget(new THREE.Vector3(mid.x + Math.sin(ang) * gap * 0.8, 0, mid.z + Math.cos(ang) * gap * 0.8));
+        await c.tweenTo(tgt, 0.45, 0, 1.7);
+      }
+      c.faceTo(other.pos);
+      c.model.setPose('happy');
+      G.applyStats(pet, { mood: 6, energy: -4, bond: key === 'a' ? 0.5 : 0 });
+      if (key === 'a') { emit('💕', mid.clone().setY(0.7), 4); voiceOf(pet); toast(`🐾 ${names}がじゃれあってる！`, 'good'); }
+      await c.wait(1.2);
+    };
+    cA.run(part(cA, pA, cB, 'a', () => gB0, A)); gA0 = cA.gen;
+    cB.run(part(cB, pB, cA, 'b', () => gA0, B)); gB0 = cB.gen;
+    return;
+  }
+  if (kind === 'chase') {
+    // B がにげて A が追いかける → 交代
+    const g0 = { a: 0, b: 0 };
+    const runner = async (c, chaser, gKey, pet, lead) => {
+      await c.wait(0.05);
+      for (let leg = 0; leg < 4; leg++) {
+        const iRun = (leg < 2) === lead;
+        if (iRun) {
+          st[gKey] = 'run';
+          const tgt = randomRoomPoint();
+          await c.walkTo(tgt, true);
+        } else {
+          for (let t = 0; t < 4; t += 0.15) {
+            if (chaser.gen !== g0[gKey === 'a' ? 'b' : 'a']) return;
+            const behind = chaser.pos.clone().add(c.pos.clone().sub(chaser.pos).setY(0).normalize().multiplyScalar(0.5 + c.scale * 0.3));
+            c.setTarget(behind, true);
+            await c.wait(0.15);
+            if (!chaser.move && t > 0.6) break;
+          }
+          c.stop();
+        }
+        await c.wait(0.25);
+      }
+      c.faceTo(chaser.pos);
+      c.model.setPose('happy');
+      G.applyStats(pet, { mood: 5, energy: -5 });
+      await c.wait(1);
+    };
+    toast(`🏃 ${names}が追いかけっこ！`);
+    cA.run(() => runner(cA, cB, 'a', A, false)); g0.a = cA.gen;
+    cB.run(() => runner(cB, cA, 'b', B, true)); g0.b = cB.gen;
+    return;
+  }
+  // nap: よりそってごろん（クッションがあればその近く、なければラグの上）
+  const cu = furn('cushion');
+  const base = cu ? cu.center.clone() : new THREE.Vector3(0.3 + rnd(-0.6, 0.6), 0, 0.6 + rnd(-0.6, 0.6));
+  const side = new THREE.Vector3(1, 0, 0).multiplyScalar(0.18 + (cA.scale + cB.scale) * 0.18);
+  const head = rnd(-0.5, 0.5);
+  let gA0, gB0;
+  const part = (c, pos, other, key, gOther, pet) => async () => {
+    await c.walkTo(c.clampTarget(pos));
+    st[key] = true;
+    if (!(await meetUp(c, other, c.gen, gOther(), () => st.a && st.b))) return;
+    c.targetHeading = head;
+    c.model.setPose(Math.random() < 0.5 ? 'sleep' : 'down');
+    if (key === 'a') toast(`💞 ${names}がよりそってごろん`, 'good');
+    for (let k = 0; k < 4; k++) {
+      await c.wait(rnd(1.8, 2.4));
+      if (key === 'a') emit('💕', c.pos.clone().add(other.pos).multiplyScalar(0.5).setY(0.6), 1, { size: 0.25 });
+    }
+    G.applyStats(pet, { mood: 6, energy: 5 });
+  };
+  cA.run(part(cA, base.clone().sub(side), cB, 'a', () => gB0, A)); gA0 = cA.gen;
+  cB.run(part(cB, base.clone().add(side), cA, 'b', () => gA0, B)); gB0 = cB.gen;
+}
+function petBuddy(b) {
+  const p = b.pet;
+  const top = b.model.headWorldPos().add(new THREE.Vector3(0, 0.35, 0));
+  if (p.sleeping) { emit('💗', top, 1, { size: 0.2 }); toast(`💤 ${p.name}はすやすや…`); return; }
+  G.applyStats(p, { mood: 3, bond: 0.8 });
+  emit('💗', top, 3);
+  voiceOf(p);
+  if (!b.ctrl.busy || Math.random() < 0.5) {
+    b.ctrl.run(async () => {
+      b.ctrl.faceTo(camera.position);
+      b.model.setPose('happy');
+      await b.ctrl.wait(1.4);
+    });
+  }
+  toast(`🐾 ${p.name}をなでた（🐾ボタンの「よぶ」でお世話する子を切りかえ）`);
+}
+function setBuddiesVisible(v) { for (const b of buddies) b.model.root.visible = v; }
+
+// ================= フリスビー大会 =================
+let fris = null; // { round, total, catches, jumps, phase, g, dir, flight, disc, npcs }
+const FRIS_START = new THREE.Vector3(0.9, 0, 10.0);
+function attachToMouth(obj, flat = false) {
+  const d = model.d;
+  const b = getBreed(curPet().breedId);
+  model.headGroup.add(obj);
+  obj.position.set(0, -d.headR * 0.4, d.headR * 0.95 + (b.snout?.L || 0.05) * 0.9);
+  obj.rotation.set(flat ? 0 : Math.PI / 2, 0, 0);
+  const ws = model.root.scale.x * model.headGroup.scale.x;
+  obj.scale.setScalar(0.9 / ws * Math.min(1, ws * 1.4));
+}
+function detachFromMouth(obj) {
+  model.headGroup.remove(obj);
+  obj.scale.setScalar(1);
+  obj.rotation.set(0, 0, 0);
+}
+async function startFrisbee() {
+  if (!ready() || !tiredCheck(20)) return;
+  const p = curPet();
+  if (p.species === 'cat' && weather === 'rain') { toast(`☔ ${p.name}は雨の日にお外であそぶのはいやみたい…`); bubble('🙅'); return; }
+  ctrl.cancel();
+  sfx.happy();
+  speak();
+  await fade(true);
+  clearParticles();
+  room.scene.remove(model.root);
+  park.scene.add(model.root);
+  mode = 'park';
+  scene = park.scene;
+  park.setTimeOfDay(new Date().getHours());
+  resetTreeFade();
+  model.root.position.copy(FRIS_START);
+  ctrl.heading = ctrl.targetHeading = Math.PI;
+  model.setPose('sit');
+  controls.target.set(0, 0.8, 5.0);
+  camera.position.set(0, 2.7, 13.8);
+  controls.enabled = false;
+  const disc = makeFrisbee();
+  fris = { round: 0, total: 10, catches: 0, jumps: 0, phase: 'aim', g: 0, dir: 1, flight: null, disc, npcs: [] };
+  // 観客
+  for (const [x, z, h] of [[-2.6, 7.0, 1.4], [2.7, 7.8, -1.5], [-2.9, 4.2, 1.6]]) {
+    const b = pick(ALL_BREEDS.filter(x => x.id !== p.breedId));
+    const m = new PetModel(b, { growth: rnd(0.75, 1), seedKey: b.id + x });
+    m.root.position.set(x, 0, z);
+    m.root.rotation.y = h;
+    m.setPose('sit');
+    park.scene.add(m.root);
+    fris.npcs.push(m);
+  }
+  playState = { kind: 'frisbee' };
+  $('actions').classList.add('hidden');
+  $('fris-hud').classList.remove('hidden');
+  updateFrisHud();
+  await fade(false);
+  toast(`🥏 フリスビー大会スタート！ゲージが金色のときに${IS_TOUCH ? 'タップ' : 'なげる'}！`, 'good');
+  if (weather === 'rain') setTimeout(() => toast('☔ 雨で地面がすべりやすい…キャッチがむずかしいかも'), 1500);
+  if (weather === 'snow') setTimeout(() => toast(p.species === 'dog' ? `⛄ 雪の公園で${p.name}は大はしゃぎ！` : `🥶 ${p.name}はちょっとさむそう…`), 1500);
+}
+function updateFrisHud() {
+  const p = curPet();
+  $('fris-round').textContent = Math.min(fris.total, fris.round + 1);
+  $('fris-total').textContent = fris.total;
+  $('fris-catch').textContent = fris.catches;
+  $('fris-best').textContent = p.frisbeeBest || 0;
+  $('btn-throw').disabled = fris.phase !== 'aim';
+}
+function throwFrisbee() {
+  if (!fris || fris.phase !== 'aim') return;
+  const p = curPet();
+  const v = fris.g;
+  const dev = Math.abs(v - 0.8);
+  const q = dev < 0.06 ? 'perfect' : dev < 0.17 ? 'good' : 'bad';
+  const dist = 4 + v * 9.5;
+  const lat = q === 'perfect' ? rnd(-0.4, 0.4) : q === 'good' ? rnd(-1.4, 1.4) : rnd(-3, 3);
+  const land = new THREE.Vector3(lat, 0, 10.6 - dist);
+  pushOut(land, park.obstacles);
+  const dur = 1.0 + dist * 0.07;
+  // キャッチできるか: 投げのよさ × 種類 × なかよし度 × げんき × 天気
+  let prob = { perfect: 0.95, good: 0.8, bad: 0.4 }[q];
+  if (p.species === 'cat') prob *= 0.75;
+  prob += p.stats.bond / 1000;
+  if (p.stats.energy < 30) prob -= 0.15;
+  if (weather === 'rain') prob -= 0.1;
+  if (weather === 'snow') prob += p.species === 'dog' ? 0.05 : -0.1;
+  prob = THREE.MathUtils.clamp(prob, 0.05, 0.98);
+  const caught = Math.random() < prob;
+  const jump = caught && (q === 'perfect' || Math.random() < 0.25);
+  fris.phase = 'fly';
+  updateFrisHud();
+  const from = new THREE.Vector3(0, 1.3, 11.2);
+  fris.flight = { from, to: land.clone().setY(0.04), t: 0, dur, h: 1.1 + dist * 0.04, side: rnd(-1, 1) * (q === 'bad' ? 1.2 : 0.4), done: false };
+  scene.add(fris.disc);
+  fris.disc.position.copy(from);
+  sfx.throw();
+  $('fris-msg').textContent = { perfect: '✨ パーフェクト！', good: '👍 いいかんじ！', bad: '😅 あらら…' }[q];
+  ctrl.run(async () => {
+    model.setPose('stand');
+    await ctrl.wait(0.15);
+    const tRun = caught ? dur * 0.9 : dur * 1.15;
+    const ground = land.clone();
+    // キャッチ位置は少し手前（フリスビーの高さが頭くらいになるところ）
+    const runP = ctrl.tweenTo(ground, tRun, 0, 1.7);
+    if (jump) { await ctrl.wait(Math.max(0, tRun - 0.35)); model.play('jump', 0.6); }
+    await runP;
+    fris.flight.done = true;
+    if (caught) {
+      attachToMouth(fris.disc);
+      fris.catches++;
+      if (jump) fris.jumps++;
+      sfx.success();
+      emit(jump ? '⭐' : '✨', petTop(), jump ? 6 : 3);
+      if (weather === 'snow' && p.species === 'dog') emit('❄️', ctrl.pos.clone().setY(0.3), 5, { size: 0.22 });
+      $('fris-msg').textContent = jump ? '🌟 ジャンプキャッチ！' : '🥏 ナイスキャッチ！';
+      for (const n of fris.npcs) { n.play('hop', 0.8); }
+      emit('👏', new THREE.Vector3(0, 1.2, 6.5), 3, { spread: 2.5, size: 0.35 });
+    } else {
+      await ctrl.wait(0.2);
+      ctrl.faceTo(fris.disc.position);
+      model.setPose('eat');
+      await ctrl.wait(0.5);
+      attachToMouth(fris.disc);
+      model.setPose('sad');
+      say(ctrl, '💦');
+      $('fris-msg').textContent = 'おしい！';
+      await ctrl.wait(0.7);
+    }
+    updateFrisHud();
+    model.setPose('stand');
+    const back = FRIS_START.clone();
+    await ctrl.tweenTo(back, Math.max(0.6, ctrl.pos.distanceTo(back) / 6), 0, 1.7);
+    ctrl.targetHeading = Math.PI;
+    detachFromMouth(fris.disc);
+    scene.remove(fris.disc);
+    model.setPose('sit');
+    fris.round++;
+    fris.flight = null;
+    if (fris.round >= fris.total) { finishFrisbee(); return; }
+    fris.phase = 'aim';
+    fris.g = 0; fris.dir = 1;
+    $('fris-msg').textContent = '';
+    updateFrisHud();
+  }, { keepPose: true });
+}
+function updateFrisbee(dt) {
+  if (!fris) return;
+  if (fris.phase === 'aim') {
+    const speed = 0.75 + fris.round * 0.1;
+    fris.g += fris.dir * speed * dt;
+    if (fris.g >= 1) { fris.g = 1; fris.dir = -1; }
+    if (fris.g <= 0) { fris.g = 0; fris.dir = 1; }
+    $('fris-needle').style.left = (fris.g * 100) + '%';
+  }
+  const f = fris.flight;
+  if (f && !f.done) {
+    f.t += dt;
+    const u = Math.min(1, f.t / f.dur);
+    const d = fris.disc;
+    d.position.lerpVectors(f.from, f.to, u);
+    d.position.x += Math.sin(Math.PI * u) * f.side;
+    d.position.y = THREE.MathUtils.lerp(f.from.y, f.to.y, u) + f.h * 4 * u * (1 - u) * (1 - u * 0.3);
+    d.rotation.y += dt * 18;
+    d.rotation.z = u < 1 ? Math.sin(Math.PI * u) * 0.25 * Math.sign(f.side) : 0;
+  }
+  for (const n of fris.npcs) { n.lookTarget = model ? model.headWorldPos() : null; n.update(dt); }
+  // カメラはペットを少し追いかける
+  const tgt = new THREE.Vector3(ctrl.pos.x * 0.5, 0.8, Math.min(6, ctrl.pos.z * 0.5 + 1.5));
+  const delta = tgt.sub(controls.target).multiplyScalar(1 - Math.exp(-dt * 2));
+  controls.target.add(delta);
+  camera.position.add(delta);
+}
+function finishFrisbee() {
+  const p = curPet();
+  const n = fris.catches, j = fris.jumps;
+  const best = p.frisbeeBest || 0;
+  const newBest = n > best;
+  if (newBest) p.frisbeeBest = n;
+  const coins = n * 3 + j * 2 + (newBest ? 20 : 0);
+  S.coins += coins;
+  G.applyStats(p, { mood: 4 + n * 1.5, energy: -12, hunger: -6, bond: n * 0.4, clean: weather === 'rain' ? -15 : -4 });
+  gainExp(10 + n * 2);
+  fris.phase = 'done';
+  updateFrisHud();
+  const rank = n >= 9 ? '🏆 チャンピオン！' : n >= 7 ? '🥇 すばらしい！' : n >= 5 ? '🥈 なかなか！' : n >= 3 ? '🥉 がんばった！' : '🐾 つぎはもっと！';
+  sfx.levelup();
+  model.setPose('happy');
+  speak();
+  emit('🎉', petTop(), 6);
+  openPanel('🥏 フリスビー大会 けっか', `<div class="fris-result">
+    <div class="rank">${rank}</div>
+    <div class="score"><b>${n}</b> / ${fris.total} キャッチ</div>
+    <div>🌟 ジャンプキャッチ ${j}回</div>
+    <div>${newBest ? `🎊 自己ベスト更新！（これまで ${best}）` : `自己ベスト: ${best}`}</div>
+    <div class="reward">ごほうび 🪙${coins}</div>
+  </div>
+  <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:14px">
+    <button class="btn" id="fris-home">🏠 おうちに帰る</button>
+    <button class="btn primary" id="fris-again">🔁 もういちど</button>
+  </div>`, el => {
+    el.querySelector('#fris-again').onclick = () => {
+      panelOnClose = null;
+      closePanel();
+      if (!tiredCheck(20)) { endFrisbee(); return; }
+      fris.round = 0; fris.catches = 0; fris.jumps = 0; fris.phase = 'aim'; fris.g = 0; fris.dir = 1;
+      $('fris-msg').textContent = '';
+      updateFrisHud();
+      refreshUI();
+    };
+    el.querySelector('#fris-home').onclick = () => { closePanel(); };
+  });
+  panelOnClose = () => endFrisbee();
+  refreshUI();
+}
+async function endFrisbee() {
+  if (!fris) return;
+  const f = fris;
+  fris = null;
+  ctrl.cancel();
+  await fade(true);
+  if (f.disc.parent) f.disc.parent.remove(f.disc);
+  for (const n of f.npcs) { park.scene.remove(n.root); n.dispose(); }
+  playState = null;
+  controls.enabled = true;
+  $('fris-hud').classList.add('hidden');
+  returnHome();
+  refreshUI();
+  await fade(false);
+  toast('🏠 ただいま！', 'good');
+  speak();
+}
+// 公園からおうちにもどす（おさんぽ・フリスビー共通）
+function returnHome() {
+  clearParticles();
+  park.scene.remove(model.root);
+  room.scene.add(model.root);
+  mode = 'room';
+  scene = room.scene;
+  model.root.position.set(0.3, 0, 1.6);
+  pushOut(model.root.position, ROOM_OBST);
+  ctrl.heading = ctrl.targetHeading = 0;
+  controls.target.set(0, 0.6, 0);
+  camera.position.set(0, 2.9, 5.9);
+  controls.maxDistance = 11;
+  $('actions').classList.remove('hidden');
+  room.setTimeOfDay(new Date().getHours(), false);
 }
 
 // ================= おさんぽ =================
@@ -1090,6 +2039,7 @@ async function startWalk() {
   if (!ready()) return;
   const p = curPet();
   if (p.stats.energy < 15) { toast(`${p.name}はつかれていてお散歩できないみたい`); bubble('💤'); return; }
+  if (p.species === 'cat' && weather === 'rain') { toast(`☔ ${p.name}は雨の日のおさんぽはいやみたい…おうちでゴロゴロしよう`); bubble('🙅'); return; }
   ctrl.cancel();
   sfx.happy();
   speak();
@@ -1108,7 +2058,7 @@ async function startWalk() {
   resetTreeFade();
   controls.maxDistance = 14;
 
-  walk = { time: 75, coins: 0, items: [], npcs: [], butterflies: [], lastInput: performance.now(), poop: null, poopAt: rnd(25, 50), pooped: false, met: 0, found: 0 };
+  walk = { time: 75, coins: 0, items: [], npcs: [], butterflies: [], lastInput: performance.now(), poop: null, poopAt: rnd(25, 50), pooped: false, met: 0, found: 0, fxT: rnd(5, 9) };
   for (let i = 0; i < 14; i++) addWalkItem('coin');
   for (let i = 0; i < 4; i++) addWalkItem(p.species === 'cat' ? 'fish' : 'bone');
   const nNpc = 3;
@@ -1131,6 +2081,11 @@ async function startWalk() {
   $('walk-coins').textContent = 0;
   await fade(false);
   toast(`🌳 ${p.name}と公園にやってきた！`, 'good');
+  const wmsg = {
+    rain: `☔ 雨の中のおさんぽ。どろんこになりやすいよ`,
+    snow: p.species === 'dog' ? `⛄ 雪だ！${p.name}は大はしゃぎ！` : `🥶 雪…${p.name}はちょっとさむそう`,
+  }[weather] || { spring: '🌸 桜がひらひら舞ってるよ', autumn: '🍂 落ち葉がいっぱい！' }[season];
+  if (wmsg) setTimeout(() => toast(wmsg), 1400);
 }
 function addWalkItem(kind) {
   const m = kind === 'coin' ? makeCoin() : kind === 'bone' ? makeBone() : makeFish();
@@ -1153,23 +2108,16 @@ async function endWalk() {
   for (const n of w.npcs) { park.scene.remove(n.model.root); n.model.dispose(); }
   for (const bf of w.butterflies) park.scene.remove(bf);
   if (w.poop) park.scene.remove(w.poop);
-  park.scene.remove(model.root);
-  room.scene.add(model.root);
-  mode = 'room';
-  scene = room.scene;
-  model.root.position.set(0.3, 0, 1.6);
-  ctrl.heading = ctrl.targetHeading = 0;
-  controls.target.set(0, 0.6, 0);
-  camera.position.set(0, 2.9, 5.9);
-  controls.maxDistance = 11;
+  returnHome();
   const spent = 75 - Math.max(0, w.time);
   const k = Math.min(1, spent / 60);
   G.applyStats(p, { energy: -20 * k, hunger: -12 * k, clean: -12 * k, mood: 10 + 15 * k, health: 6 * k, bond: 2 + 4 * k });
+  // 天気のえいきょう
+  if (weather === 'rain') G.applyStats(p, { clean: -15 * k, mood: -6 * k });
+  if (weather === 'snow') G.applyStats(p, p.species === 'dog' ? { mood: 8 * k } : { mood: -6 * k });
   p.walks = (p.walks || 0) + 1;
   S.coins += w.coins;
   $('walk-hud').classList.add('hidden');
-  $('actions').classList.remove('hidden');
-  room.setTimeOfDay(new Date().getHours(), false);
   gainExp(Math.round(8 + 20 * k));
   refreshUI();
   await fade(false);
@@ -1315,6 +2263,38 @@ function updateWalk(dt) {
     u.wings[1].rotation.z = -flap;
   }
 
+  // 天気・季節のしぐさ（雪ではしゃぐ・舞う花びらや落ち葉にじゃれる）
+  w.fxT -= dt;
+  if (w.fxT <= 0 && !ctrl.busy && performance.now() - w.lastInput > 1500) {
+    w.fxT = rnd(6, 11);
+    const fx = weather === 'snow' ? 'snow' : (season === 'spring' || season === 'autumn') && weather !== 'rain' ? 'leaf' : null;
+    if (fx === 'snow' && p.species === 'dog') {
+      ctrl.run(async () => {
+        ctrl.stop();
+        model.setPose('happy'); model.wagAmp = 1;
+        model.play('hop', 1.0);
+        emit('❄️', ctrl.pos.clone().setY(0.3), 5, { size: 0.22 });
+        bubble('❄️');
+        await ctrl.wait(1.1);
+        model.play('roll', 1.2);
+        await ctrl.wait(1.3);
+      });
+    } else if (fx === 'snow') {
+      ctrl.run(async () => { ctrl.stop(); model.setPose('crouch'); model.play('shake', 0.6); bubble('🥶'); await ctrl.wait(1.2); });
+    } else if (fx === 'leaf') {
+      const ch = season === 'spring' ? '🌸' : '🍂';
+      ctrl.run(async () => {
+        ctrl.stop();
+        model.setPose('crouch'); bubble(ch);
+        await ctrl.wait(0.5);
+        model.play('pounce', 0.5); model.setPose('stand');
+        await ctrl.wait(0.5);
+        emit(ch, ctrl.pos.clone().add(new THREE.Vector3(Math.sin(ctrl.heading) * 0.4, 0.4, Math.cos(ctrl.heading) * 0.4)), 3, { size: 0.22 });
+        await ctrl.wait(0.6);
+      });
+    }
+  }
+
   // うんちタイム
   if (!w.pooped && 75 - w.time > w.poopAt && !ctrl.busy) {
     w.pooped = true;
@@ -1412,8 +2392,19 @@ function idleAI(dt) {
     goToSleep();
     return;
   }
-  const r = Math.random();
   const sad = p.stats.mood < 25 || p.stats.health < 40;
+  if (!sad) {
+    // ほかの子との交流・天気のしぐさ・家具
+    const awake = buddies.filter(b => canInteract(b));
+    if (awake.length && Math.random() < 0.3) { startInteraction(pick(awake)); return; }
+    const wfx = weatherIdle(ctrl);
+    if (wfx) { ctrl.run(wfx); return; }
+    if (placedFurn.length && Math.random() < 0.35) {
+      const f = pickFurnitureFor(p);
+      if (f) { ctrl.run(async () => { if (!(await useFurniture(ctrl, f))) await ctrl.wait(1); }); return; }
+    }
+  }
+  const r = Math.random();
   ctrl.run(async () => {
     if (sad) {
       model.setPose('sad');
@@ -1491,7 +2482,11 @@ raycaster.params.Line.threshold = 0.005; // ひげ(Line)が当たり判定を奪
 const ndc = new THREE.Vector2();
 let downPos = null;
 const keys = new Set();
-window.addEventListener('keydown', e => { if (e.target.tagName !== 'INPUT') keys.add(e.key.toLowerCase()); });
+window.addEventListener('keydown', e => {
+  if (e.target.tagName === 'INPUT') return;
+  keys.add(e.key.toLowerCase());
+  if (e.key === ' ' && playState?.kind === 'frisbee' && $('panel').classList.contains('hidden')) { e.preventDefault(); throwFrisbee(); }
+});
 window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 window.addEventListener('blur', () => keys.clear());
 
@@ -1518,10 +2513,16 @@ canvas.addEventListener('pointerup', e => {
 });
 function handleClick(e) {
   if (!model || adoptState || !curPet()) return;
+  if (playState?.kind === 'frisbee') { throwFrisbee(); return; }
   setNdc(e);
   if (playState) return;
   // ペット
   if (raycaster.intersectObject(model.root, true).length) { petPet(); return; }
+  if (mode === 'room') {
+    for (const b of buddies) {
+      if (raycaster.intersectObject(b.model.root, true).length) { petBuddy(b); return; }
+    }
+  }
   if (mode === 'room') {
     const ph = raycaster.intersectObject(poopGroup, true)[0];
     if (ph) {
@@ -1598,6 +2599,9 @@ $('actions').addEventListener('click', e => {
 });
 $('btn-gohome').onclick = () => { sfx.click(); endWalk(); };
 $('btn-pets').onclick = () => { sfx.click(); openPets(); };
+$('btn-room').onclick = () => { sfx.click(); openRoomEdit(); };
+$('weather').onclick = () => { sfx.click(); weatherToast(); };
+$('btn-throw').onclick = () => throwFrisbee();
 $('btn-sound').onclick = () => { setMuted(!isMuted()); S.muted = isMuted(); refreshUI(); sfx.click(); };
 $('btn-help').onclick = () => {
   sfx.click();
@@ -1605,6 +2609,10 @@ $('btn-help').onclick = () => {
     <h3>基本</h3><p>ペットのステータス（おなか・きげん・せいけつ・げんき・けんこう・なかよし）は時間とともに変化します。下のボタンでお世話をしてあげましょう。</p>
     <h3>操作</h3><p>${IS_TOUCH ? '👆 1本指でなぞってカメラ回転、2本指でピンチしてズーム。' : '🖱 ドラッグでカメラ回転、ホイール/ピンチでズーム。'}<br>🐾 ペットを${TAP} → なでる（ねこはさわりすぎると怒るかも）<br>🏠 床を${TAP} → 「おいで」でその場所に来ます<br>💩 うんちを${TAP} → おそうじ${IS_TOUCH ? '<br>📊 左上のステータスを' + TAP + 'すると、くわしい数値が見られます' : ''}</p>
     <h3>できること</h3><p>🥣ごはん / 🍪おやつ / 🎾ボールなげ・🪶猫じゃらし / 🌳おさんぽ（コインやおやつ拾い・おともだちとの出会い） / 🎓芸のトレーニング（11種類） / 🛁おふろ / 🪮ブラッシング / 💤おやすみ / 🎀きせかえ / 🛒ショップ / 📷しゃしん / 🏥びょういん / 🐾多頭飼い（最大6匹）</p>
+    <h3>多頭飼い</h3><p>2匹目からは、みんないっしょにお部屋で暮らします。じゃれあったり、追いかけっこしたり、よりそって寝たりするよ。お世話する子は🐾ボタンの「よぶ」で切りかえます。</p>
+    <h3>模様替え</h3><p>ショップで家具を買うと、🛋️ボタンで置き場所を変えられます。ねこはキャットタワーに登り、犬はいぬごやで寝るなど、家具ごとに反応がちがいます。</p>
+    <h3>天気と季節</h3><p>季節は現実の月、天気は日ごとに変わります（右上の${G.SEASONS[season].icon}${G.WEATHERS[weather].icon}を${TAP}すると今日の天気）。雨の日はおうちでゴロゴロ、雪の日は犬が大はしゃぎ。春は桜、秋は落ち葉が舞います。</p>
+    <h3>フリスビー大会</h3><p>「あそぶ」→「フリスビー大会」。ゲージが金色のときに投げるとパーフェクト！10投でキャッチ回数を競います。</p>
     <h3>成長</h3><p>お世話で経験値がたまりレベルアップ。子犬・子猫 → わかもの → おとな と体が大きくなり、新しい芸も覚えられるようになります。</p>
     <h3>セーブ</h3><p>データはこのブラウザに自動保存されます。ゲームを閉じている間も少しずつお腹がすくので、ときどき会いに来てね。</p>
   </div>`);
@@ -1623,8 +2631,15 @@ function tick() {
   for (const p of S.pets) {
     const wasSleeping = p.sleeping;
     G.decay(p, minutes);
-    if (p === active && wasSleeping && !p.sleeping) wakeUp(false);
+    if (wasSleeping && !p.sleeping) {
+      if (p === active) wakeUp(false);
+      else {
+        const b = buddies.find(x => x.pet === p);
+        if (b) { b.ctrl.cancel(); leaveBed(b.ctrl); b.model.setPose('stand'); b.ctrl.idleT = rnd(1, 3); }
+      }
+    }
   }
+  if (updateWeather()) weatherToast();
   if (active && active.poopTimer > 0 && mode === 'room') {
     active.poopTimer = Math.max(0, active.poopTimer - 1);
     if (active.poopTimer === 0) active.poopTimer = 0.001;
@@ -1688,6 +2703,8 @@ function animate() {
 
     if (mode === 'room' && !adoptState) {
       idleAI(dt);
+      updateBuddies(dt);
+      interactCD -= dt;
       followCamera(new THREE.Vector3(ctrl.pos.x * 0.45, 0, ctrl.pos.z * 0.45), 1, dt * 0.5);
       if (p.sleeping) {
         zzzAcc += dt;
@@ -1699,6 +2716,7 @@ function animate() {
       }
     }
     if (walk) updateWalk(dt);
+    if (fris) updateFrisbee(dt);
     if (playState?.kind === 'teaser') {
       playState.time -= dt;
       $('play-time').textContent = Math.max(0, Math.ceil(playState.time));
@@ -1732,6 +2750,13 @@ function animate() {
   }
 
   updateParticles(dt);
+  // 天気・家具のアニメーション
+  if (mode === 'room') {
+    room.update(dt);
+    const h = new Date().getHours();
+    const fctx = { t: clock.elapsedTime, night: h < 6 || h >= 18 || !!curPet()?.sleeping };
+    for (const f of placedFurn) f.obj.userData.update?.(dt, fctx);
+  } else park.update(dt, controls.target);
 
   // ふきだしの位置
   if (bubbleT > 0 && model) {
@@ -1760,8 +2785,11 @@ function startup() {
   if (!S.active && S.pets.length) S.active = S.pets[0].id;
   room.setTimeOfDay(new Date().getHours(), !!curPet()?.sleeping);
   park.setTimeOfDay(new Date().getHours());
+  updateWeather(true);
+  rebuildFurniture();
   if (S.pets.length) {
     spawnModel();
+    spawnBuddies();
     refreshUI();
   }
   $('loading').classList.add('hidden');
@@ -1788,6 +2816,7 @@ $('btn-start').onclick = () => {
     setTimeout(() => { sfx.coin(); toast('🎁 ログインボーナス！ 🪙50', 'good'); refreshUI(); }, 800);
   }
   if (offlineMins > 1) toast(`おかえりなさい！${p.name}が待っていたよ`);
+  setTimeout(weatherToast, offlineMins > 1 ? 2600 : 1600);
   speak();
   emit('💖', petTop(), 4);
 };

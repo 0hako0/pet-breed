@@ -20,6 +20,97 @@ function shadowy(obj) {
   return obj;
 }
 
+// ================= 雨・雪・花びら・落ち葉 =================
+const PRECIP = {
+  rain: { n: 1600, size: 0.42, fall: [9, 12], sway: 0, h: 14, cols: ['#cfe3ff'] },
+  snow: { n: 1100, size: 0.16, fall: [0.8, 1.5], sway: 0.6, h: 12, cols: ['#ffffff'] },
+  petal: { n: 160, size: 0.15, fall: [0.5, 0.9], sway: 0.9, h: 7, cols: ['#ffc4d6', '#ffb0c8', '#fff0f4'] },
+  leaf: { n: 140, size: 0.2, fall: [0.6, 1.1], sway: 1.0, h: 8, cols: ['#e8833a', '#d9542c', '#f2b134', '#b5651d'] },
+};
+function precipTex(kind) {
+  return canvasTex(64, 64, (g, w, h) => {
+    g.clearRect(0, 0, w, h);
+    if (kind === 'rain') {
+      const gr = g.createLinearGradient(0, 0, 0, h);
+      gr.addColorStop(0, 'rgba(255,255,255,0)'); gr.addColorStop(1, 'rgba(255,255,255,0.9)');
+      g.fillStyle = gr; g.fillRect(w / 2 - 2, 0, 4, h);
+    } else if (kind === 'snow') {
+      const gr = g.createRadialGradient(w / 2, h / 2, 0, w / 2, h / 2, w / 2);
+      gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.5, 'rgba(255,255,255,0.8)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+      g.fillStyle = gr; g.fillRect(0, 0, w, h);
+    } else if (kind === 'petal') {
+      g.fillStyle = '#fff'; g.beginPath(); g.ellipse(w / 2, h / 2, w * 0.42, h * 0.26, 0.6, 0, Math.PI * 2); g.fill();
+    } else {
+      g.fillStyle = '#fff'; g.beginPath(); g.moveTo(w / 2, 4); g.quadraticCurveTo(w - 4, h / 2, w / 2, h - 4); g.quadraticCurveTo(4, h / 2, w / 2, 4); g.fill();
+    }
+  });
+}
+// 注視点のまわりに降らせるパーティクル（Points 1つなので軽い）
+function makePrecip(kind, radius) {
+  const c = PRECIP[kind];
+  const geo = new THREE.BufferGeometry();
+  const pos = new Float32Array(c.n * 3), col = new Float32Array(c.n * 3);
+  const spd = new Float32Array(c.n), ph = new Float32Array(c.n);
+  const tmp = new THREE.Color();
+  for (let i = 0; i < c.n; i++) {
+    const a = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * radius;
+    pos[i * 3] = Math.cos(a) * r; pos[i * 3 + 1] = Math.random() * c.h; pos[i * 3 + 2] = Math.sin(a) * r;
+    tmp.set(c.cols[i % c.cols.length]);
+    col[i * 3] = tmp.r; col[i * 3 + 1] = tmp.g; col[i * 3 + 2] = tmp.b;
+    spd[i] = c.fall[0] + Math.random() * (c.fall[1] - c.fall[0]);
+    ph[i] = Math.random() * 10;
+  }
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  const pts = new THREE.Points(geo, new THREE.PointsMaterial({
+    size: c.size, map: precipTex(kind), vertexColors: true, transparent: true, depthWrite: false,
+    opacity: kind === 'rain' ? 0.8 : 0.95, sizeAttenuation: true,
+  }));
+  pts.frustumCulled = false;
+  pts.userData = { kind, c, spd, ph, radius, t: 0 };
+  return pts;
+}
+function updatePrecip(pts, dt, center) {
+  if (!pts) return;
+  const u = pts.userData, c = u.c;
+  const a = pts.geometry.attributes.position.array;
+  u.t += dt;
+  pts.position.set(center.x, 0, center.z);
+  for (let i = 0; i < c.n; i++) {
+    a[i * 3 + 1] -= u.spd[i] * dt;
+    if (c.sway) {
+      a[i * 3] += Math.sin(u.t * 1.3 + u.ph[i]) * c.sway * dt;
+      a[i * 3 + 2] += Math.cos(u.t * 1.1 + u.ph[i]) * c.sway * dt * 0.6;
+    }
+    if (a[i * 3 + 1] < 0) {
+      const an = Math.random() * Math.PI * 2, r = Math.sqrt(Math.random()) * u.radius;
+      a[i * 3] = Math.cos(an) * r; a[i * 3 + 1] = c.h * (0.85 + Math.random() * 0.15); a[i * 3 + 2] = Math.sin(an) * r;
+    }
+  }
+  pts.geometry.attributes.position.needsUpdate = true;
+}
+// 地面にかぶせる「雪の積もり・落ち葉・花びら」のテクスチャ
+function groundCoverTex(kind) {
+  return canvasTex(512, 512, (g, w, h) => {
+    g.clearRect(0, 0, w, h);
+    if (kind === 'snow') {
+      g.fillStyle = 'rgba(250,252,255,0.93)'; g.fillRect(0, 0, w, h);
+      for (let i = 0; i < 1400; i++) {
+        g.fillStyle = Math.random() < 0.5 ? 'rgba(215,228,245,0.6)' : 'rgba(255,255,255,0.9)';
+        g.beginPath(); g.arc(Math.random() * w, Math.random() * h, 2 + Math.random() * 7, 0, Math.PI * 2); g.fill();
+      }
+    } else {
+      const cols = kind === 'leaf' ? ['#e8833a', '#d9542c', '#f2b134', '#b5651d'] : ['#ffc4d6', '#ffb0c8', '#fff0f4'];
+      for (let i = 0; i < (kind === 'leaf' ? 700 : 900); i++) {
+        g.fillStyle = cols[i % cols.length];
+        g.save(); g.translate(Math.random() * w, Math.random() * h); g.rotate(Math.random() * 6);
+        g.beginPath(); g.ellipse(0, 0, kind === 'leaf' ? 7 : 4, kind === 'leaf' ? 4 : 2.6, 0, 0, Math.PI * 2); g.fill();
+        g.restore();
+      }
+    }
+  }, [10, 10]);
+}
+
 // ================= 部屋 =================
 export function buildRoom() {
   const scene = new THREE.Scene();
@@ -129,6 +220,29 @@ export function buildRoom() {
   const sun = new THREE.Mesh(new THREE.CircleGeometry(0.18, 24), new THREE.MeshBasicMaterial({ color: '#fff3a0' }));
   sun.position.set(0.55, 0.35, 0.005);
   windowGroup.add(sun);
+  // 窓の外の天気（雨・雪・花びら・落ち葉）をテクスチャのスクロールで表現
+  const winFxTex = {};
+  for (const k of ['rain', 'snow', 'petal', 'leaf']) {
+    winFxTex[k] = canvasTex(256, 256, (g, w, h) => {
+      g.clearRect(0, 0, w, h);
+      const n = k === 'rain' ? 70 : k === 'snow' ? 60 : 16;
+      for (let i = 0; i < n; i++) {
+        const x = Math.random() * w, y = Math.random() * h;
+        if (k === 'rain') { g.strokeStyle = 'rgba(230,240,255,0.75)'; g.lineWidth = 2; g.beginPath(); g.moveTo(x, y); g.lineTo(x - 3, y + 18); g.stroke(); }
+        else if (k === 'snow') { g.fillStyle = 'rgba(255,255,255,0.95)'; g.beginPath(); g.arc(x, y, 2 + Math.random() * 3, 0, Math.PI * 2); g.fill(); }
+        else { g.fillStyle = k === 'petal' ? '#ffb7cc' : ['#e8833a', '#d9542c', '#f2b134'][i % 3]; g.beginPath(); g.ellipse(x, y, 6, 3.5, Math.random() * 3, 0, Math.PI * 2); g.fill(); }
+      }
+    }, [1.5, 1]);
+  }
+  const winFx = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 1.5), new THREE.MeshBasicMaterial({ transparent: true, depthWrite: false }));
+  winFx.position.z = 0.008;
+  winFx.visible = false;
+  windowGroup.add(winFx);
+  // 雪の日は窓の外に積もった雪
+  const winSnow = new THREE.Mesh(new THREE.PlaneGeometry(2.2, 0.3), new THREE.MeshBasicMaterial({ color: '#f4f8ff' }));
+  winSnow.position.set(0, -0.6, 0.006);
+  winSnow.visible = false;
+  windowGroup.add(winSnow);
   windowGroup.position.set(-1.2, 2.0, -S + 0.02);
   scene.add(windowGroup);
 
@@ -260,12 +374,40 @@ export function buildRoom() {
       center: new THREE.Vector3(0.3, 0, 0.6),
     },
     lights: { hemi, dir, lamp, sky: skyMat, sun, shade },
+    weather: 'sunny', season: 'spring', hour: 12, sleeping: false,
+    windowSpot: new THREE.Vector3(-1.2, 0, -S + 1.1),
+    setWeather(weather, season) {
+      this.weather = weather; this.season = season;
+      const fx = weather === 'rain' ? 'rain' : weather === 'snow' ? 'snow' : season === 'spring' ? 'petal' : season === 'autumn' ? 'leaf' : null;
+      winFx.visible = !!fx;
+      if (fx) { winFx.material.map = winFxTex[fx]; winFx.material.needsUpdate = true; winFx.userData.speed = { rain: 1.6, snow: 0.18, petal: 0.12, leaf: 0.14 }[fx]; }
+      winSnow.visible = weather === 'snow';
+      sun.visible = weather === 'sunny';
+      this.setTimeOfDay(this.hour, this.sleeping);
+    },
+    update(dt) {
+      if (winFx.visible) {
+        const m = winFx.material.map;
+        m.offset.y += dt * winFx.userData.speed;
+        m.offset.x += dt * (winFx.userData.speed < 1 ? 0.05 : 0.15);
+      }
+    },
     setTimeOfDay(hour, sleeping) {
+      this.hour = hour; this.sleeping = sleeping;
       // 現実の時刻にあわせて窓の外と照明を変える
       let sky, sunCol, dirI, hemiI, lampI, bg;
       if (hour >= 6 && hour < 16) { sky = '#9fd6ff'; sunCol = '#fff3a0'; dirI = 1.6; hemiI = 0.9; lampI = 0; bg = '#f6e9da'; }
       else if (hour >= 16 && hour < 19) { sky = '#ffb27a'; sunCol = '#ff8a3d'; dirI = 1.0; hemiI = 0.75; lampI = 3; bg = '#f3dcc6'; }
       else { sky = '#1c2a54'; sunCol = '#f4f1c9'; dirI = 0.35; hemiI = 0.45; lampI = 7; bg = '#3a3350'; }
+      // 天気: くもり・雨・雪の日は窓の外が灰色っぽく、部屋も少し暗い
+      const day = hour >= 6 && hour < 19;
+      const wSky = { cloudy: '#c5ccd6', rain: '#8d98a6', snow: '#dde4ee' }[this.weather];
+      if (wSky) {
+        sky = new THREE.Color(sky).lerp(new THREE.Color(wSky), day ? 0.85 : 0.3).getStyle();
+        const k = { cloudy: 0.75, rain: 0.55, snow: 0.8 }[this.weather];
+        dirI *= k;
+        if (day && this.weather === 'rain') lampI = Math.max(lampI, 2.5);
+      }
       if (sleeping) { dirI *= 0.25; hemiI *= 0.35; lampI = 1.5; bg = '#2a2540'; }
       skyMat.color.set(sky);
       sun.material.color.set(sunCol);
@@ -325,6 +467,13 @@ export function buildPark() {
   path2.position.y = 0.012;
   path2.receiveShadow = true;
   scene.add(path2);
+  const coverTex = {};
+  const groundCover = new THREE.Mesh(new THREE.CircleGeometry(30, 64), new THREE.MeshStandardMaterial({ transparent: true, roughness: 1, depthWrite: false }));
+  groundCover.rotation.x = -Math.PI / 2;
+  groundCover.position.y = 0.016;
+  groundCover.receiveShadow = true;
+  groundCover.visible = false;
+  scene.add(groundCover);
 
   // 池
   const pond = new THREE.Mesh(new THREE.CircleGeometry(2.6, 40), m('#5ab4e6', { roughness: 0.15, metalness: 0.1 }));
@@ -399,10 +548,11 @@ export function buildPark() {
   }
 
   // 雲
+  const cloudMat = new THREE.MeshBasicMaterial({ color: '#ffffff' });
   for (let i = 0; i < 8; i++) {
     const c = new THREE.Group();
     for (let k = 0; k < 4; k++) {
-      const s = new THREE.Mesh(new THREE.SphereGeometry(1 + Math.random(), 10, 8), new THREE.MeshBasicMaterial({ color: '#ffffff' }));
+      const s = new THREE.Mesh(new THREE.SphereGeometry(1 + Math.random(), 10, 8), cloudMat);
       s.position.set(k * 1.3, Math.random() * 0.5, Math.random());
       c.add(s);
     }
@@ -426,14 +576,56 @@ export function buildPark() {
   return {
     scene, ground, dir, trees,
     bounds: { radius: R - 1 },
+    weather: 'sunny', season: 'spring', hour: 12, precip: null,
+    setWeather(weather, season) {
+      this.weather = weather; this.season = season;
+      // 木の葉の色（季節）
+      const pal = {
+        spring: [['#f7b6c8', '#f39ab5', '#ffd1dc'], ['#4f9d4a', '#5bb055', '#3f8a3e']],
+        summer: [['#3f8f3a', '#4ea845', '#2f7a30']],
+        autumn: [['#e8833a', '#d9542c', '#f2b134'], ['#c9672a', '#e0a33a', '#a8451f']],
+        winter: weather === 'snow' ? [['#eef3f8', '#dfe8f0', '#f8fbff']] : [['#6f8f6a', '#7b9a72', '#5f7f5c']],
+      }[season];
+      trees.forEach((t, ti) => {
+        const set = pal[ti % pal.length];
+        t.traverse(o => { if (o.isMesh && o.userData.leaf !== undefined) o.material.color.set(set[o.userData.leaf]); });
+      });
+      // 地面のおおい
+      const cover = weather === 'snow' ? 'snow' : season === 'autumn' ? 'leaf' : season === 'spring' ? 'petal' : null;
+      groundCover.visible = !!cover;
+      if (cover) {
+        if (!coverTex[cover]) coverTex[cover] = groundCoverTex(cover);
+        groundCover.material.map = coverTex[cover];
+        groundCover.material.opacity = cover === 'snow' ? 1 : 0.9;
+        groundCover.material.needsUpdate = true;
+      }
+      path.material.color.set(weather === 'snow' ? '#eef2f7' : '#e6cf9e');
+      path2.material.color.set(weather === 'snow' ? '#eef2f7' : '#e6cf9e');
+      // 降るもの
+      if (this.precip) { scene.remove(this.precip); this.precip.geometry.dispose(); this.precip.material.dispose(); this.precip = null; }
+      const fx = weather === 'rain' ? 'rain' : weather === 'snow' ? 'snow' : season === 'spring' ? 'petal' : season === 'autumn' ? 'leaf' : null;
+      if (fx) { this.precip = makePrecip(fx, fx === 'rain' || fx === 'snow' ? 14 : 11); scene.add(this.precip); }
+      cloudMat.color.set(weather === 'rain' ? '#9aa3ad' : weather === 'cloudy' || weather === 'snow' ? '#e2e6ea' : '#ffffff');
+      this.setTimeOfDay(this.hour);
+    },
+    update(dt, center) { updatePrecip(this.precip, dt, center); },
     obstacles: [[4.2, -3.2, 3.4], ...treeSpots.map(([x, z]) => [x, z, 0.7])],
     setTimeOfDay(hour) {
+      this.hour = hour;
       let bg, i;
       if (hour >= 6 && hour < 16) { bg = '#bfe6ff'; i = 1.8; }
       else if (hour >= 16 && hour < 19) { bg = '#ffc79a'; i = 1.2; }
       else { bg = '#34407a'; i = 0.6; }
+      const day = hour >= 6 && hour < 19;
+      const wSky = { cloudy: '#c9d1da', rain: '#8f9aa6', snow: '#dfe6ee' }[this.weather];
+      if (wSky) {
+        bg = new THREE.Color(bg).lerp(new THREE.Color(wSky), day ? 0.8 : 0.3).getStyle();
+        i *= { cloudy: 0.7, rain: 0.5, snow: 0.8 }[this.weather];
+      }
       scene.background.set(bg);
       scene.fog.color.set(bg);
+      scene.fog.near = this.weather === 'rain' || this.weather === 'snow' ? 10 : 18;
+      scene.fog.far = this.weather === 'rain' || this.weather === 'snow' ? 34 : 45;
       dir.intensity = i;
       hemi.intensity = hour >= 19 || hour < 6 ? 0.55 : 1.0;
     },
@@ -448,6 +640,7 @@ function makeTree() {
   const greens = ['#4f9d4a', '#5bb055', '#3f8a3e'];
   for (let i = 0; i < 4; i++) {
     const s = new THREE.Mesh(new THREE.IcosahedronGeometry(0.9 + Math.random() * 0.3, 1), m(greens[i % 3], { flatShading: true }));
+    s.userData.leaf = i % 3;
     s.position.set((Math.random() - 0.5) * 0.9, 1.9 + Math.random() * 0.7, (Math.random() - 0.5) * 0.9);
     g.add(s);
   }
@@ -464,6 +657,21 @@ export function makeBall(color = '#ef476f') {
   const b = new THREE.Mesh(new THREE.SphereGeometry(0.13, 20, 14), new THREE.MeshStandardMaterial({ map: tex, roughness: 0.5 }));
   b.castShadow = true;
   return b;
+}
+
+export function makeFrisbee() {
+  const g = new THREE.Group();
+  const top = new THREE.Mesh(new THREE.CylinderGeometry(0.17, 0.15, 0.03, 28), m('#ff4d6d', { roughness: 0.4 }));
+  g.add(top);
+  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.165, 0.018, 8, 28), m('#ffd23f', { roughness: 0.4 }));
+  rim.rotation.x = Math.PI / 2;
+  g.add(rim);
+  const star = new THREE.Mesh(new THREE.CircleGeometry(0.06, 5), m('#ffffff'));
+  star.rotation.x = -Math.PI / 2;
+  star.position.y = 0.016;
+  g.add(star);
+  g.traverse(o => { if (o.isMesh) o.castShadow = true; });
+  return g;
 }
 
 export function makeTeaser() {

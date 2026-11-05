@@ -43,7 +43,9 @@
     <!-- 右上 -->
     <div id="topright" class="hidden">
       <div class="coins card">🪙 <b id="coins">0</b></div>
+      <button class="chip-btn card" id="weather" title="今日の天気">🌸☀️</button>
       <button class="icon-btn" id="btn-pets" title="ペット一覧">🐾</button>
+      <button class="icon-btn" id="btn-room" title="お部屋の模様替え">🛋️</button>
       <button class="icon-btn" id="btn-sound" title="音のON/OFF">🔊</button>
       <button class="icon-btn" id="btn-help" title="あそびかた">❓</button>
     </div>
@@ -59,6 +61,22 @@
     <!-- 猫じゃらし中 -->
     <div id="play-hud" class="card hidden">
       <div>🪶 <span class="kb-only">マウスで</span><span class="touch-only">指でなぞって</span>猫じゃらしを動かそう！ <b id="play-time">12</b>秒</div>
+    </div>
+
+    <!-- フリスビー大会 -->
+    <div id="fris-hud" class="card hidden">
+      <div class="fris-top">
+        <b>🥏 フリスビー大会</b>
+        <span><b id="fris-round">1</b>/<span id="fris-total">10</span>投</span>
+        <span>キャッチ <b id="fris-catch">0</b></span>
+        <span class="fris-best">ベスト <b id="fris-best">0</b></span>
+      </div>
+      <div class="fris-gauge"><div class="zone good"></div><div class="zone perfect"></div><div class="needle" id="fris-needle"></div></div>
+      <div class="fris-row">
+        <div class="fris-msg" id="fris-msg"></div>
+        <button class="btn primary" id="btn-throw">🥏 なげる！</button>
+      </div>
+      <div class="fris-sub"><span class="kb-only">スペースキーでもなげられるよ・</span>金色のところでなげるとパーフェクト！</div>
     </div>
 
     <!-- ふきだし -->
