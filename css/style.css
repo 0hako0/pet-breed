@@ -1,5 +1,6 @@
 * { box-sizing: border-box; margin: 0; padding: 0; }
-html, body { width: 100%; height: 100%; overflow: hidden; background: #f6e9da; }
+html, body { width: 100%; height: 100%; overflow: hidden; background: #f6e9da; overscroll-behavior: none; }
+html { touch-action: manipulation; -webkit-text-size-adjust: 100%; }
 body {
   font-family: 'M PLUS Rounded 1c', 'Hiragino Maru Gothic ProN', 'Meiryo', sans-serif;
   color: #4a3a2e;
@@ -31,7 +32,7 @@ body {
 .btn:disabled { opacity: .45; cursor: default; }
 
 /* ステータス */
-#status { position: absolute; left: 14px; top: 14px; width: 250px; padding: 12px 14px; }
+#status { position: absolute; left: calc(14px + env(safe-area-inset-left)); top: calc(14px + env(safe-area-inset-top)); width: 250px; padding: 12px 14px; }
 .status-head { display: flex; justify-content: space-between; align-items: center; }
 .pet-name { font-size: 20px; font-weight: 800; }
 .pet-sub { font-size: 12px; color: #9a7e66; }
@@ -49,13 +50,13 @@ body {
 .bar-row.low .lb { color: #e8505b; animation: blink 1s infinite; }
 @keyframes blink { 50% { opacity: .4; } }
 
-#topright { position: absolute; right: 14px; top: 14px; display: flex; gap: 8px; align-items: center; }
+#topright { position: absolute; right: calc(14px + env(safe-area-inset-right)); top: calc(14px + env(safe-area-inset-top)); display: flex; gap: 8px; align-items: center; }
 .coins { padding: 8px 14px; font-size: 17px; }
 .icon-btn { width: 42px; height: 42px; border-radius: 50%; border: 2px solid #fff; background: rgba(255,252,247,.92); font-size: 19px; cursor: pointer; box-shadow: 0 4px 12px rgba(120,80,40,.18); }
 
 /* アクションバー */
 #actions {
-  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%);
+  position: absolute; left: 50%; bottom: calc(12px + env(safe-area-inset-bottom)); transform: translateX(-50%);
   display: flex; gap: 6px; padding: 8px; max-width: calc(100% - 20px); overflow-x: auto;
   background: rgba(255, 252, 247, 0.9); border-radius: 22px; box-shadow: 0 6px 20px rgba(120,80,40,.2);
 }
@@ -66,7 +67,7 @@ body {
   transition: transform .08s;
 }
 .act span { font-size: 24px; line-height: 1.1; }
-.act:hover { background: #fff4e6; }
+@media (hover: hover) { .act:hover { background: #fff4e6; } }
 .act:active { transform: translateY(2px); box-shadow: 0 1px 0 #ead8c4; }
 .act:disabled { opacity: .4; }
 .act.on { background: #ffe0b8; }
@@ -166,12 +167,118 @@ body {
 .help p { font-size: 14px; line-height: 1.8; margin-bottom: 8px; }
 .help h3 { font-size: 15px; margin: 10px 0 4px; color: #ff8f4a; }
 
+.status-toggle { display: none; }
+.touch-only { display: none; }
+@media (pointer: coarse) { .touch-only { display: inline; } .kb-only { display: none; } }
+
+/* ===== スマホ（縦持ち） ===== */
 @media (max-width: 720px) {
-  #status { width: 200px; padding: 8px 10px; transform-origin: top left; }
-  .bar-row .lb { width: 46px; font-size: 11px; }
+  /* 右上ボタンは縦に並べてステータスと重ならないようにする */
+  #topright { top: calc(10px + env(safe-area-inset-top)); right: calc(10px + env(safe-area-inset-right)); flex-direction: column; align-items: flex-end; gap: 6px; }
+  .coins { padding: 6px 10px; font-size: 14px; border-radius: 14px; }
+  .icon-btn { width: 40px; height: 40px; font-size: 18px; }
+
+  /* ステータス: ふだんはコンパクト表示、タップでくわしく */
+  #status {
+    top: calc(10px + env(safe-area-inset-top)); left: calc(10px + env(safe-area-inset-left));
+    width: auto; right: calc(84px + env(safe-area-inset-right)); max-width: 320px;
+    padding: 8px 10px; cursor: pointer;
+  }
   .pet-name { font-size: 16px; }
-  .act { min-width: 56px; font-size: 11px; }
-  .act span { font-size: 20px; }
-  #adopt { left: 2vw; right: 2vw; top: auto; height: 62vh; width: auto; }
-  #walk-hud { top: auto; bottom: 96px; right: 10px; width: 220px; }
+  .pet-sub { font-size: 11px; }
+  .lv-badge { padding: 1px 8px; }
+  .lv-badge b { font-size: 16px; }
+  .exp-bar { margin: 5px 0 6px; }
+  #bars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px 8px; }
+  .bar-row { margin: 0; gap: 3px; }
+  .bar-row .ic { width: 16px; font-size: 13px; }
+  .bar-row .lb, .bar-row .v { display: none; }
+  .bar { height: 8px; }
+  .status-toggle { display: block; text-align: center; font-size: 10px; color: #b09a86; margin-top: 4px; line-height: 1; }
+  #status.expanded #bars { display: block; }
+  #status.expanded .bar-row { margin: 4px 0; gap: 6px; }
+  #status.expanded .bar-row .lb { display: inline; width: 50px; font-size: 11px; }
+  #status.expanded .bar-row .v { display: inline; }
+  #status.expanded .bar { height: 10px; }
+
+  /* アクションバー: 横スクロールをやめて全ボタンを一覧表示 */
+  #actions {
+    left: calc(8px + env(safe-area-inset-left)); right: calc(8px + env(safe-area-inset-right)); transform: none; max-width: none;
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    display: grid; grid-template-columns: repeat(6, 1fr); gap: 5px; padding: 6px; border-radius: 20px; overflow: visible;
+  }
+  .act { min-width: 0; font-size: 10.5px; padding: 6px 1px 6px; border-radius: 14px; white-space: nowrap; letter-spacing: -0.02em; min-height: 52px; justify-content: center; }
+  .act span { font-size: 22px; }
+
+  /* トーストは画面下（アクションバーの上）に */
+  #toasts { top: auto; bottom: calc(140px + env(safe-area-inset-bottom)); width: calc(100% - 24px); }
+  .toast { font-size: 13px; padding: 7px 14px; text-align: center; max-width: 100%; }
+
+  /* パネル: 下から出るボトムシート */
+  .panel { align-items: flex-end; }
+  .panel-inner {
+    width: 100%; max-height: 86vh; max-height: 86dvh; border-radius: 22px 22px 0 0; border-bottom: none;
+    padding: 16px 14px calc(20px + env(safe-area-inset-bottom)); animation: sheetUp .22s ease-out;
+    overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  }
+  .panel h2 { font-size: 18px; padding-right: 44px; }
+  .close { width: 40px; height: 40px; font-size: 17px; right: 10px; top: 10px; }
+  .grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .item { padding: 8px; }
+  .item .big { font-size: 30px; }
+  .btn.small { padding: 8px 14px; font-size: 13px; }
+  .trick-row { flex-wrap: wrap; gap: 6px 10px; }
+  .trick-row .nm { width: auto; flex: 1 1 auto; }
+  .trick-row .lock { width: auto; }
+  .trick-row .prog { order: 3; flex: 1 1 100%; height: 8px; }
+
+  /* むかえる画面: ボトムシート */
+  #adopt { left: 0; right: 0; bottom: 0; top: auto; width: auto; height: 60vh; height: 60dvh; }
+  .adopt-card { border-radius: 22px 22px 0 0; border-bottom: none; padding: 12px 12px calc(12px + env(safe-area-inset-bottom)); gap: 8px; }
+  .adopt-card h2 { font-size: 16px; }
+  .tab { padding: 7px; font-size: 15px; }
+  .breed-list { gap: 6px; }
+  .breed { font-size: 12px; padding: 8px 6px; gap: 6px; min-height: 42px; }
+  .breed-desc { font-size: 12px; min-height: 0; padding: 8px 10px; }
+  .adopt-name label { white-space: nowrap; font-size: 14px; }
+  .adopt-name input { min-width: 0; padding: 8px 10px; }
+  .adopt-btns .btn { flex: 1; }
+
+  /* おさんぽ・猫じゃらしの表示は画面下に */
+  #walk-hud {
+    top: auto; left: calc(10px + env(safe-area-inset-left)); right: calc(10px + env(safe-area-inset-right)); width: auto;
+    bottom: calc(10px + env(safe-area-inset-bottom)); padding: 10px 12px;
+    display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center;
+  }
+  #walk-hud .walk-sub { grid-column: 1 / -1; order: 3; }
+  #walk-hud .walk-score { font-size: 13px; }
+  #btn-gohome { grid-column: 2; grid-row: 1 / 3; padding: 10px 14px; }
+  #play-hud { top: auto; bottom: calc(14px + env(safe-area-inset-bottom)); width: calc(100% - 20px); text-align: center; font-size: 14px; }
+
+  #title p { font-size: 14px; }
+  .title-paws { font-size: 32px; }
+}
+@keyframes sheetUp { from { transform: translateY(40px); opacity: 0; } }
+
+/* ===== スマホ（横持ち）: 縦が狭いのでコンパクトに ===== */
+@media (max-height: 500px) and (min-width: 721px) {
+  #status { width: 220px; padding: 6px 10px; top: calc(8px + env(safe-area-inset-top)); }
+  .pet-name { font-size: 15px; }
+  .bar-row { margin: 2px 0; }
+  .bar { height: 8px; }
+  #actions { bottom: calc(6px + env(safe-area-inset-bottom)); padding: 5px; }
+  .act { min-width: 56px; font-size: 11px; padding: 4px; }
+  .act span { font-size: 19px; }
+  .panel-inner { max-height: 92vh; max-height: 92dvh; }
+  #adopt { top: calc(8px + env(safe-area-inset-top)); bottom: calc(8px + env(safe-area-inset-bottom)); width: min(560px, 60vw); }
+  .adopt-card { padding: 10px 12px; gap: 6px; }
+  .adopt-card h2 { font-size: 15px; }
+  .tab { padding: 5px; font-size: 14px; }
+  .breed-list { grid-template-columns: repeat(3, 1fr); gap: 6px; }
+  .breed { font-size: 12px; padding: 6px; }
+  .breed-desc { font-size: 12px; min-height: 0; padding: 6px 10px; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+  .adopt-name input { padding: 5px 10px; }
+  .adopt-btns .btn, .adopt-name .btn { padding: 6px 16px; }
+  #walk-hud { top: auto; bottom: 10px; }
+  #toasts { top: 10px; }
 }

@@ -2,7 +2,10 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover" />
+  <meta name="theme-color" content="#f6e9da" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="mobile-web-app-capable" content="yes" />
   <title>わんにゃんライフ 3D - ペット育成ゲーム</title>
   <!-- フォント: M PLUS Rounded 1c (SIL Open Font License 1.1 / Google Fonts) -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
@@ -34,6 +37,7 @@
       </div>
       <div class="exp-bar"><div id="exp-fill"></div></div>
       <div id="bars"></div>
+      <div class="status-toggle" id="status-toggle">▼ くわしく</div>
     </div>
 
     <!-- 右上 -->
@@ -47,14 +51,14 @@
     <!-- 散歩中の表示 -->
     <div id="walk-hud" class="card hidden">
       <div>🌳 おさんぽ中 <b id="walk-time">60</b>秒</div>
-      <div class="walk-sub">地面をクリック/タップで移動・WASDキーでも歩けるよ<br>コイン🪙やおやつを拾おう！</div>
+      <div class="walk-sub"><span class="kb-only">地面をクリックで移動・WASDキーでも歩けるよ<br></span><span class="touch-only">地面をタップするとそこへ歩くよ・</span>コイン🪙やおやつを拾おう！</div>
       <div class="walk-score">ひろったコイン: <b id="walk-coins">0</b></div>
       <button class="btn primary" id="btn-gohome">🏠 おうちに帰る</button>
     </div>
 
     <!-- 猫じゃらし中 -->
     <div id="play-hud" class="card hidden">
-      <div>🪶 マウス/指で猫じゃらしを動かそう！ <b id="play-time">12</b>秒</div>
+      <div>🪶 <span class="kb-only">マウスで</span><span class="touch-only">指でなぞって</span>猫じゃらしを動かそう！ <b id="play-time">12</b>秒</div>
     </div>
 
     <!-- ふきだし -->

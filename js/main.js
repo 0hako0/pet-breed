@@ -120,7 +120,15 @@ function fade(on) {
   return new Promise(r => setTimeout(r, 480));
 }
 
-// ステータスバー
+// タッチ操作の端末では「クリック」ではなく「タップ」と案内する
+const IS_TOUCH = window.matchMedia('(pointer: coarse)').matches;
+const TAP = IS_TOUCH ? 'タップ' : 'クリック';
+
+// ステータスバー（スマホではタップで くわしく/かんたん 表示を切り替え）
+$('status').addEventListener('click', () => {
+  const ex = $('status').classList.toggle('expanded');
+  $('status-toggle').textContent = ex ? '▲ とじる' : '▼ くわしく';
+});
 const barsEl = $('bars');
 const barRefs = {};
 for (const s of G.STAT_INFO) {
@@ -493,7 +501,7 @@ function openPlay() {
   const dog = p.species === 'dog';
   openPanel('🎾 いっしょにあそぶ', `<div class="grid">
     <div class="item ${dog ? 'like' : ''}"><div class="big">🎾</div><div class="nm">ボールなげ</div><div class="ds">投げたボールを取ってくるよ ${dog ? '<span class="tag">大好き</span>' : ''}</div><button class="btn small primary" data-play="ball">あそぶ</button></div>
-    <div class="item ${!dog ? 'like' : ''}"><div class="big">🪶</div><div class="nm">猫じゃらし</div><div class="ds">マウスで動かして追いかけっこ ${!dog ? '<span class="tag">大好き</span>' : ''}</div><button class="btn small primary" data-play="teaser">あそぶ</button></div>
+    <div class="item ${!dog ? 'like' : ''}"><div class="big">🪶</div><div class="nm">猫じゃらし</div><div class="ds">${IS_TOUCH ? '指でなぞって' : 'マウスで動かして'}追いかけっこ ${!dog ? '<span class="tag">大好き</span>' : ''}</div><button class="btn small primary" data-play="teaser">あそぶ</button></div>
   </div>`, el => {
     el.querySelectorAll('[data-play]').forEach(b => b.onclick = () => { closePanel(); b.dataset.play === 'ball' ? playBall() : playTeaser(); });
   });
@@ -1051,7 +1059,7 @@ $('btn-adopt').onclick = () => {
   setTimeout(() => speak(), 300);
   emit('💖', petTop(), 8);
   toast(`🎉 ${name}（${getBreed(p.breedId).name}）が家族になりました！`, 'good');
-  setTimeout(() => toast('ペットをクリックするとなでられるよ'), 1800);
+  setTimeout(() => toast(`ペットを${TAP}するとなでられるよ`), 1800);
 };
 function closeAdopt() {
   if (adoptState?.preview) { room.scene.remove(adoptState.preview.root); adoptState.preview.dispose(); }
@@ -1321,7 +1329,7 @@ function updateWalk(dt) {
         park.scene.add(pp);
         w.poop = pp;
         model.setPose('happy');
-        toast('💩 うんちをしたよ！クリックして拾ってあげよう（マナー）');
+        toast(`💩 うんちをしたよ！${TAP}して拾ってあげよう（マナー）`);
         await ctrl.wait(0.8);
       });
     }
@@ -1364,7 +1372,7 @@ function idleAI(dt) {
       pos.z = THREE.MathUtils.clamp(pos.z, b.minZ, b.maxZ);
       p.poops.push({ x: pos.x, z: pos.z });
       rebuildPoops();
-      toast('💩 うんちをしたみたい！クリックでおそうじしよう');
+      toast(`💩 うんちをしたみたい！${TAP}でおそうじしよう`);
       model.setPose('happy');
       await ctrl.wait(1);
     });
@@ -1567,7 +1575,7 @@ $('btn-help').onclick = () => {
   sfx.click();
   openPanel('❓ あそびかた', `<div class="help">
     <h3>基本</h3><p>ペットのステータス（おなか・きげん・せいけつ・げんき・けんこう・なかよし）は時間とともに変化します。下のボタンでお世話をしてあげましょう。</p>
-    <h3>操作</h3><p>🖱 ドラッグでカメラ回転、ホイール/ピンチでズーム。<br>🐾 ペットをクリック → なでる（ねこはさわりすぎると怒るかも）<br>🏠 床をクリック → 「おいで」でその場所に来ます<br>💩 うんちをクリック → おそうじ</p>
+    <h3>操作</h3><p>${IS_TOUCH ? '👆 1本指でなぞってカメラ回転、2本指でピンチしてズーム。' : '🖱 ドラッグでカメラ回転、ホイール/ピンチでズーム。'}<br>🐾 ペットを${TAP} → なでる（ねこはさわりすぎると怒るかも）<br>🏠 床を${TAP} → 「おいで」でその場所に来ます<br>💩 うんちを${TAP} → おそうじ${IS_TOUCH ? '<br>📊 左上のステータスを' + TAP + 'すると、くわしい数値が見られます' : ''}</p>
     <h3>できること</h3><p>🥣ごはん / 🍪おやつ / 🎾ボールなげ・🪶猫じゃらし / 🌳おさんぽ（コインやおやつ拾い・おともだちとの出会い） / 🎓芸のトレーニング（11種類） / 🛁おふろ / 🪮ブラッシング / 💤おやすみ / 🎀きせかえ / 🛒ショップ / 📷しゃしん / 🏥びょういん / 🐾多頭飼い（最大6匹）</p>
     <h3>成長</h3><p>お世話で経験値がたまりレベルアップ。子犬・子猫 → わかもの → おとな と体が大きくなり、新しい芸も覚えられるようになります。</p>
     <h3>セーブ</h3><p>データはこのブラウザに自動保存されます。ゲームを閉じている間も少しずつお腹がすくので、ときどき会いに来てね。</p>
