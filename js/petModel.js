@@ -711,40 +711,36 @@ export class PetModel {
     // 目（大きめ・うるうる）
     this.eyes = []; this.eyeOpenG = []; this.eyeHappy = []; this.eyeRelax = []; this.brows = []; this.pupils = [];
     const big = b.bigEyes ? 1.15 : 1;
-    const eyeR = R * (this.isCat ? 0.19 : 0.16) * big;
+    const eyeR = R * (this.isCat ? 0.175 : 0.155) * big;
     this.eyeR = eyeR;
-    const irisCol = b.coloredIris ? col.eye : '#4a2c17';
+    // 犬はほぼ黒のつぶらな目、猫は色を少しやわらげる
+    const irisCol = b.coloredIris ? '#' + new THREE.Color(col.eye).lerp(new THREE.Color('#fff6e0'), 0.18).getHexString() : '#24160c';
     const lineMat = mat('#2a1a12', { roughness: 0.6 });
     const white = new THREE.MeshBasicMaterial({ color: 0xffffff });
     for (const s of [-1, 1]) {
       const eg = new THREE.Group();
-      const ex = this.isCat ? 0.42 : 0.4, ey = this.isCat ? 0.05 : 0.1;
+      const ex = this.isCat ? 0.41 : 0.4, ey = this.isCat ? 0.0 : 0.06;
       const ez = Math.sqrt(Math.max(0.05, 1 - ex * ex - ey * ey));
       const rr = R + headFur * 0.95;
       eg.position.set(s * ex * rr * hs.x, ey * rr * hs.y, ez * rr * hs.z * 0.97);
-      eg.lookAt(eg.position.clone().multiply(new THREE.Vector3(1.6, 0.6, 1)).add(new THREE.Vector3(0, 0, R * 2)));
+      eg.lookAt(eg.position.clone().multiply(new THREE.Vector3(1.2, 0.6, 1)).add(new THREE.Vector3(0, 0, R * 2)));
       const open = new THREE.Group();
       eg.add(open);
-      // 縁取り（くっきり見せる）
-      const rim = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 1.08, 18, 12), mat('#120a06', { roughness: 0.3 }));
-      rim.scale.z = 0.45;
-      rim.position.z = -eyeR * 0.05;
-      open.add(rim);
       const iris = new THREE.Mesh(new THREE.SphereGeometry(eyeR, 18, 14), mat(irisCol, { roughness: 0.12 }));
       iris.scale.z = 0.5;
       open.add(iris);
       const pupil = new THREE.Mesh(new THREE.SphereGeometry(eyeR, 16, 12), mat('#050505', { roughness: 0.1 }));
-      pupil.userData.base = this.isCat ? new THREE.Vector3(0.42, 0.9, 0.3) : new THREE.Vector3(0.62, 0.62, 0.3);
+      pupil.userData.base = this.isCat ? new THREE.Vector3(0.62, 0.82, 0.3) : new THREE.Vector3(0.74, 0.74, 0.3);
       pupil.scale.copy(pupil.userData.base);
       pupil.position.z = eyeR * 0.28;
       open.add(pupil);
       this.pupils.push(pupil);
       // ハイライト（大・小）でうるうるに
-      const hl = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.3, 10, 8), white);
-      hl.position.set(-eyeR * 0.3, eyeR * 0.36, eyeR * 0.5);
+      const hl = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.36, 10, 8), white);
+      hl.position.set(-eyeR * 0.28, eyeR * 0.32, eyeR * 0.52);
       open.add(hl);
-      const hl2 = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.13, 8, 6), white);
-      hl2.position.set(eyeR * 0.32, -eyeR * 0.34, eyeR * 0.48);
+      const hl2 = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.17, 8, 6), white);
+      hl2.position.set(eyeR * 0.3, -eyeR * 0.3, eyeR * 0.5);
       open.add(hl2);
       // にっこり目（∩）・とじた目（∪）
       const happy = new THREE.Mesh(new THREE.TorusGeometry(eyeR * 0.72, eyeR * 0.15, 6, 20, Math.PI), lineMat);
