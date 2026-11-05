@@ -366,6 +366,7 @@ export function buildRoom() {
 
   return {
     scene, floor, bowl, water, bed, toybox,
+    occluders: [toybox, plant, shelf], // カメラとペットの間に入ったら半透明にする物
     bounds: { minX: -S + 0.6, maxX: S - 0.6, minZ: -S + 0.6, maxZ: S - 0.4 },
     spots: {
       bowl: new THREE.Vector3(3.0, 0, -1.75),

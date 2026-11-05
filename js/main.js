@@ -21,14 +21,15 @@ renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 
 const camera = new THREE.PerspectiveCamera(42, window.innerWidth / window.innerHeight, 0.1, 200);
-camera.position.set(0, 2.9, 5.9);
+camera.position.set(0, 2.2, 4.9);
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.enablePan = false;
 controls.minDistance = 2.2;
 controls.maxDistance = 11;
 controls.maxPolarAngle = 1.42;
-controls.target.set(0, 0.6, 0);
+controls.target.set(0, 0.5, 0);
+controls.minDistance = 1.6;
 
 window.addEventListener('resize', () => {
   camera.aspect = window.innerWidth / window.innerHeight;
@@ -1094,16 +1095,39 @@ function openAdopt(first) {
   renderBreedList();
   selectBreed(adoptState.breed);
   $('adopt-name').value = pick(NAMES.dog);
-  // 見本のペットにカメラを寄せる（パネルに隠れないよう少し右にずらす）
-  const narrow = window.innerWidth < 720;
-  controls.target.set(narrow ? -0.6 : 0.2, narrow ? 0.0 : 0.45, 0.8);
-  camera.position.set(narrow ? -0.6 : 0.2, 1.4, 3.9);
+  // 見本のペットにカメラを寄せる（selectBreed の中で大きさに合わせて調整）
 }
 function renderBreedList() {
   const list = adoptState.species === 'dog' ? DOG_BREEDS : CAT_BREEDS;
   document.querySelectorAll('#adopt .tab').forEach(t => t.classList.toggle('active', t.dataset.sp === adoptState.species));
   $('breed-list').innerHTML = list.map(b => `<button class="breed ${b.id === adoptState.breed ? 'sel' : ''}" data-b="${b.id}"><span class="sw" style="background:${b.colors.body};box-shadow:0 0 0 1px #ddd, inset -6px -6px 0 ${b.colors.head === b.colors.body ? b.colors.belly : b.colors.head}"></span>${b.name}</button>`).join('');
   $('breed-list').querySelectorAll('[data-b]').forEach(el => el.onclick = () => { sfx.click(); selectBreed(el.dataset.b); });
+}
+// おむかえ画面: 犬種・猫種の大きさに合わせて、見本の子が「パネルに隠れていない所」のまん中に収まるようカメラを置く
+function frameAdoptPreview(pm) {
+  pm.root.updateMatrixWorld(true);
+  const sc = pm.root.scale.x;
+  const px = pm.root.position.x, pz = pm.root.position.z;
+  const Hp = pm.headWorldPos().y + 0.45 * sc;          // 耳の先までのだいたいの高さ
+  const len = (pm.breed.body.L + 0.55) * sc;           // 頭からおしりまでの長さ
+  const tanV = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const tanH = tanV * camera.aspect;
+  const narrow = window.innerWidth < 720;
+  let D, tx, ty;
+  if (narrow) {
+    // 下 60% はパネル。上 40% の帯（画面中央から上へ 0.6 の位置が帯の中心）に入れる
+    D = Math.max(Hp * 1.75 / (0.8 * tanV), len * 1.25 / (2 * tanH));
+    tx = px;
+    ty = Hp * 0.45 - 0.58 * tanV * D;
+  } else {
+    // 右側はパネル。左側の空いている所のまん中に
+    const pf = Math.min(0.6, (Math.min(430, window.innerWidth * 0.96) + 28) / window.innerWidth);
+    D = Math.max(Hp * 1.5 / (2 * tanV), len * 1.2 / (2 * tanH * (1 - pf)));
+    tx = px + pf * tanH * D;
+    ty = Hp / 2;
+  }
+  controls.target.set(tx, ty, pz);
+  camera.position.set(tx, ty + D * 0.12, pz + D);
 }
 function selectBreed(id) {
   adoptState.breed = id;
@@ -1116,6 +1140,7 @@ function selectBreed(id) {
   pm.setPose('stand');
   room.scene.add(pm.root);
   adoptState.preview = pm;
+  frameAdoptPreview(pm);
   adoptState.spinT = 0;
   voice(b.species === 'cat', b.species === 'dog' && b.size < 0.8);
 }
@@ -1153,8 +1178,8 @@ $('btn-adopt').onclick = () => {
 function closeAdopt() {
   if (adoptState?.preview) { room.scene.remove(adoptState.preview.root); adoptState.preview.dispose(); }
   adoptState = null;
-  controls.target.set(0, 0.6, 0);
-  camera.position.set(0, 2.9, 5.9);
+  controls.target.set(model ? model.root.position.x : 0, 0.5, model ? model.root.position.z : 0);
+  camera.position.copy(controls.target).add(new THREE.Vector3(0, 1.7, 4.4));
   $('adopt').classList.add('hidden');
   if (model) model.root.visible = true;
   poopGroup.visible = true;
@@ -1226,6 +1251,7 @@ function weatherIdle(c) {
 }
 // ペットのふきだし（いまの子はふきだし、ほかの子は絵文字を出す）
 function say(c, ch) {
+  if (c !== ctrl && ch.length > 2) ch = '🎵';
   if (c === ctrl) bubble(ch);
   else if (c.model) emit(ch, c.model.headWorldPos().add(new THREE.Vector3(0, 0.35, 0)), 1, { up: 0.3, size: 0.32, spread: 0, life: 1.6 });
 }
@@ -1292,6 +1318,7 @@ async function useFurniture(c, f) {
         c.targetHeading = sp.heading + rnd(-0.8, 0.8);
         await c.tweenTo(sp.pos, 0.2, 0.05);
         m.setPose(cat && Math.random() < 0.5 ? 'sleep' : 'down');
+        if (cat) m.purr(4);
         await relax(rnd(5, 9), '😌');
         await c.tweenTo(sp.pos.clone().setY(0), 0.2);
         break;
@@ -1545,7 +1572,7 @@ function spawnBuddies(posMap = {}) {
   buddies.length = 0;
   for (const p of S.pets) {
     if (p.id === S.active) continue;
-    const m = new PetModel(getBreed(p.breedId), { equip: p.equip, growth: G.growthFor(p.level), seedKey: p.id });
+    const m = new PetModel(getBreed(p.breedId), { equip: p.equip, growth: G.growthFor(p.level), seedKey: p.id, fur: 'mid' });
     const c = new Ctrl(p);
     c.attach(m);
     m.root.position.copy(posMap[p.id] || randomRoomPoint());
@@ -1761,20 +1788,39 @@ function startInteraction(b) {
   cA.run(part(cA, base.clone().sub(side), cB, 'a', () => gB0, A)); gA0 = cA.gen;
   cB.run(part(cB, base.clone().add(side), cA, 'b', () => gA0, B)); gB0 = cB.gen;
 }
+// なでられたときの反応（犬: しっぽぶんぶん＋にっこり / 猫: ゴロゴロ＋目を細める）
+let purrSoundT = 0;
+function reactToPetting(c, p) {
+  const m = c.model;
+  if (p.species === 'cat') {
+    m.purr(2.6);
+    m.wagAmp = 0.5;
+    const now = performance.now();
+    if (now - purrSoundT > 2000) { purrSoundT = now; sfx.purr(2.4); }
+    if (c === ctrl) bubble('ゴロゴロ♪', 1.6, true); else say(c, '🎵');
+  } else {
+    m.setExpression('joy', 1.8);
+    m.wagAmp = 1.25;
+    if (c === ctrl) bubble(pick(['💕', '♪', '😊']), 1.4);
+  }
+  if (!c.busy) {
+    c.run(async () => {
+      c.faceTo(camera.position);
+      // 猫はなでられると目を細めて座る、犬はうれしくてぴょん
+      if (p.species === 'cat') { m.setPose('sit'); m.purr(2.6); }
+      else { m.setPose('happy'); if (Math.random() < 0.4) m.play('hop', 0.7); }
+      if (Math.random() < 0.3) voiceOf(p);
+      await c.wait(1.6);
+    }, { keepPose: p.species === 'cat' });
+  }
+}
 function petBuddy(b) {
   const p = b.pet;
   const top = b.model.headWorldPos().add(new THREE.Vector3(0, 0.35, 0));
   if (p.sleeping) { emit('💗', top, 1, { size: 0.2 }); toast(`💤 ${p.name}はすやすや…`); return; }
   G.applyStats(p, { mood: 3, bond: 0.8 });
   emit('💗', top, 3);
-  voiceOf(p);
-  if (!b.ctrl.busy || Math.random() < 0.5) {
-    b.ctrl.run(async () => {
-      b.ctrl.faceTo(camera.position);
-      b.model.setPose('happy');
-      await b.ctrl.wait(1.4);
-    });
-  }
+  reactToPetting(b.ctrl, p);
   toast(`🐾 ${p.name}をなでた（🐾ボタンの「よぶ」でお世話する子を切りかえ）`);
 }
 function setBuddiesVisible(v) { for (const b of buddies) b.model.root.visible = v; }
@@ -1822,7 +1868,7 @@ async function startFrisbee() {
   // 観客
   for (const [x, z, h] of [[-2.6, 7.0, 1.4], [2.7, 7.8, -1.5], [-2.9, 4.2, 1.6]]) {
     const b = pick(ALL_BREEDS.filter(x => x.id !== p.breedId));
-    const m = new PetModel(b, { growth: rnd(0.75, 1), seedKey: b.id + x });
+    const m = new PetModel(b, { growth: rnd(0.75, 1), seedKey: b.id + x, fur: 'low' });
     m.root.position.set(x, 0, z);
     m.root.rotation.y = h;
     m.setPose('sit');
@@ -1890,6 +1936,8 @@ function throwFrisbee() {
       fris.catches++;
       if (jump) fris.jumps++;
       sfx.success();
+      model.setExpression('joy', 1.6);
+      model.wagAmp = 1.25;
       emit(jump ? '⭐' : '✨', petTop(), jump ? 6 : 3);
       if (weather === 'snow' && p.species === 'dog') emit('❄️', ctrl.pos.clone().setY(0.3), 5, { size: 0.22 });
       $('fris-msg').textContent = jump ? '🌟 ジャンプキャッチ！' : '🥏 ナイスキャッチ！';
@@ -2019,8 +2067,8 @@ function returnHome() {
   model.root.position.set(0.3, 0, 1.6);
   pushOut(model.root.position, ROOM_OBST);
   ctrl.heading = ctrl.targetHeading = 0;
-  controls.target.set(0, 0.6, 0);
-  camera.position.set(0, 2.9, 5.9);
+  controls.target.set(model ? model.root.position.x : 0, 0.5, model ? model.root.position.z : 0);
+  camera.position.copy(controls.target).add(new THREE.Vector3(0, 1.7, 4.4));
   controls.maxDistance = 11;
   $('actions').classList.remove('hidden');
   room.setTimeOfDay(new Date().getHours(), false);
@@ -2064,7 +2112,7 @@ async function startWalk() {
   const nNpc = 3;
   for (let i = 0; i < nNpc; i++) {
     const b = pick(ALL_BREEDS.filter(x => x.id !== p.breedId));
-    const m = new PetModel(b, { growth: rnd(0.75, 1), equip: Math.random() < 0.6 ? { neck: pick(['collar_blue', 'collar_pink', 'bandana_red', 'bandana_blue']) } : {}, seedKey: b.id + i });
+    const m = new PetModel(b, { growth: rnd(0.75, 1), equip: Math.random() < 0.6 ? { neck: pick(['collar_blue', 'collar_pink', 'bandana_red', 'bandana_blue']) } : {}, seedKey: b.id + i, fur: 'low' });
     m.root.position.copy(randomParkPoint(12));
     park.scene.add(m.root);
     walk.npcs.push({ model: m, breed: b, name: pick(NPC_NAMES), target: randomParkPoint(), wait: rnd(0, 2), heading: 0, met: false, metT: 0 });
@@ -2317,7 +2365,7 @@ function updateWalk(dt) {
   }
 
   // カメラ追従
-  followCamera(ctrl.pos, 1, dt);
+  followCamera(ctrl.pos, 1, dt * 1.5, petFocusY());
 }
 // ペットとカメラの間にある木・カメラがめり込んだ木を半透明にする
 const _seg = new THREE.Line3(), _cp = new THREE.Vector3(), _ext = new THREE.Vector3();
@@ -2327,27 +2375,54 @@ function setTreeOpacity(t, a) {
   t.traverse(o => {
     if (!o.isMesh) return;
     const mt = o.material;
-    if (mt.transparent !== see) { mt.transparent = see; mt.depthWrite = !see; mt.needsUpdate = true; }
-    mt.opacity = a;
+    // もともと半透明の物（金魚ばちのガラスなど）はその設定を保つ
+    if (mt.userData.baseO === undefined) { mt.userData.baseO = mt.opacity; mt.userData.baseT = mt.transparent; mt.userData.baseDW = mt.depthWrite; }
+    const tr = mt.userData.baseT || see;
+    if (mt.transparent !== tr) { mt.transparent = tr; mt.needsUpdate = true; }
+    mt.depthWrite = mt.userData.baseDW && !see;
+    mt.opacity = mt.userData.baseO * a;
   });
 }
 function resetTreeFade() { for (const t of park.trees) if (t.userData.fade !== 1) setTreeOpacity(t, 1); }
-function updateTreeFade(dt) {
-  // 注視点（ペット）→カメラの線分。カメラの少し後ろまで延ばしてニアクリップ付近もカバー
+// list の中で、注視点（ペット）→カメラの線をさえぎる物を半透明にする
+function fadeBlocking(list, dt, minA) {
+  // カメラの少し後ろまで延ばしてニアクリップ付近もカバー
   _ext.copy(camera.position).sub(controls.target).normalize().multiplyScalar(0.6).add(camera.position);
   _seg.set(controls.target, _ext);
   const k = 1 - Math.exp(-dt * 10);
-  for (const t of park.trees) {
+  for (const t of list) {
+    if (!t.userData.sphere) {
+      t.updateMatrixWorld(true);
+      t.userData.sphere = new THREE.Box3().setFromObject(t).getBoundingSphere(new THREE.Sphere());
+    }
+    if (t.userData.fade === undefined) t.userData.fade = 1;
     const sp = t.userData.sphere;
     const block = _seg.closestPointToPoint(sp.center, true, _cp).distanceTo(sp.center) < sp.radius * 0.95;
-    const goal = block ? 0.1 : 1;
+    const goal = block ? minA : 1;
     const cur = t.userData.fade;
     if (Math.abs(goal - cur) < 0.005) { if (cur !== goal) setTreeOpacity(t, goal); continue; }
     setTreeOpacity(t, cur + (goal - cur) * k);
   }
 }
-function followCamera(pos, k, dt) {
-  const desired = new THREE.Vector3(pos.x * k, 0.6, pos.z * k);
+function updateTreeFade(dt) { fadeBlocking(park.trees, dt, 0.1); }
+function updateRoomFade(dt) {
+  // ペットが上に乗っている家具（ソファ・タワーなど）は透かさない
+  const list = [...room.occluders];
+  for (const f of placedFurn) {
+    const onTop = ctrl.pos.y > 0.2 && Math.hypot(ctrl.pos.x - f.center.x, ctrl.pos.z - f.center.z) < f.def.r + 0.4;
+    if (onTop) { if (f.obj.userData.fade !== undefined && f.obj.userData.fade !== 1) setTreeOpacity(f.obj, 1); }
+    else list.push(f.obj);
+  }
+  fadeBlocking(list, dt, 0.25);
+}
+// ペットの頭の高さ（カメラの注視点に使う）
+function petFocusY() {
+  if (!model) return 0.5;
+  return THREE.MathUtils.clamp(model.headWorldPos(tmpFocus).y * 0.72, 0.3, 2.2);
+}
+const tmpFocus = new THREE.Vector3();
+function followCamera(pos, k, dt, y = 0.6) {
+  const desired = new THREE.Vector3(pos.x * k, y, pos.z * k);
   const delta = desired.sub(controls.target).multiplyScalar(1 - Math.exp(-dt * 3));
   controls.target.add(delta);
   camera.position.add(delta);
@@ -2461,18 +2536,7 @@ function petPet() {
   G.applyStats(p, { mood: 3, bond: 0.8 });
   if (petLog.length % 3 === 0) gainExp(1);
   emit('💖', petTop(), 2, { size: 0.25 });
-  model.wagAmp = 1;
-  if (p.species === 'cat') sfx.purr();
-  if (!ctrl.busy || !walk) {
-    if (!ctrl.busy) {
-      ctrl.run(async () => {
-        faceCam();
-        model.setPose('happy');
-        if (Math.random() < 0.3) speak();
-        await ctrl.wait(1.4);
-      });
-    }
-  }
+  reactToPetting(ctrl, p);
   refreshUI();
 }
 
@@ -2705,7 +2769,8 @@ function animate() {
       idleAI(dt);
       updateBuddies(dt);
       interactCD -= dt;
-      followCamera(new THREE.Vector3(ctrl.pos.x * 0.45, 0, ctrl.pos.z * 0.45), 1, dt * 0.5);
+      // ペットがいつも画面のまん中にくるように追いかける
+      followCamera(ctrl.pos, 1, dt * 1.6, petFocusY());
       if (p.sleeping) {
         zzzAcc += dt;
         if (zzzAcc > 1.6) {
@@ -2772,6 +2837,7 @@ function animate() {
 
   controls.update();
   if (mode === 'park') updateTreeFade(dt);
+  else if (!adoptState) updateRoomFade(dt);
   renderer.render(scene, camera);
 }
 

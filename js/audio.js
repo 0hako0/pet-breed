@@ -67,8 +67,35 @@ export const sfx = {
     tone({ type: 'triangle', f0: 950, f1: 520, dur: 0.35, vol: 0.2, delay: 0.17, curve: 'lin' });
     tone({ type: 'sine', f0: 1200, f1: 1900, dur: 0.18, vol: 0.06, curve: 'lin' });
   },
-  purr() {
-    for (let i = 0; i < 8; i++) noise({ dur: 0.07, vol: 0.12, freq: 120, q: 0.8, delay: i * 0.09 });
+  // ゴロゴロ: 低い雑音を 1秒に25回くらい強弱させる
+  purr(dur = 2.2) {
+    if (muted) return;
+    const c = ac();
+    const t = c.currentTime;
+    const len = Math.floor(c.sampleRate * dur);
+    const buf = c.createBuffer(1, len, c.sampleRate);
+    const d = buf.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const src = c.createBufferSource();
+    src.buffer = buf;
+    const lp = c.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 260;
+    const am = c.createGain();
+    am.gain.value = 0.22;
+    const lfo = c.createOscillator();
+    lfo.frequency.value = 25;
+    const lfoG = c.createGain();
+    lfoG.gain.value = 0.22;
+    lfo.connect(lfoG).connect(am.gain);
+    const env = c.createGain();
+    env.gain.setValueAtTime(0.0001, t);
+    env.gain.exponentialRampToValueAtTime(1, t + 0.25);
+    env.gain.setValueAtTime(1, t + dur - 0.4);
+    env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    src.connect(lp).connect(am).connect(env).connect(master);
+    src.start(t); lfo.start(t);
+    src.stop(t + dur); lfo.stop(t + dur);
   },
   hiss() { noise({ dur: 0.6, vol: 0.18, freq: 4000, q: 0.5 }); },
   eat() {

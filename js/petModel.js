@@ -1,5 +1,6 @@
 // ペットの3Dモデルを犬種・猫種パラメータから手続き的に生成し、ポーズ・アニメーションを制御する
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const matCache = new Map();
 function mat(color, opts = {}) {
@@ -23,6 +24,72 @@ function hashStr(str) {
   for (let i = 0; i < str.length; i++) { h ^= str.charCodeAt(i); h = Math.imul(h, 16777619); }
   return h >>> 0;
 }
+
+// ===== 毛並み（ファーシェル） =====
+// 同じ形を少しずつ大きくした「毛の層」を重ね、上の層ほど毛先だけが残るようにして
+// ふわふわの毛並みに見せる（alphaTest で切り抜くので並べ替え不要・軽め）
+let strandBase = null;
+function strandTexture(rx, ry) {
+  if (!strandBase) {
+    const S = 256;
+    const c = document.createElement('canvas');
+    c.width = c.height = S;
+    const g = c.getContext('2d');
+    g.fillStyle = '#000'; g.fillRect(0, 0, S, S);
+    const r = rand(12345);
+    for (let i = 0; i < 3800; i++) {
+      const v = Math.floor((0.35 + r() * 0.65) * 255);
+      g.fillStyle = `rgb(${v},${v},${v})`;
+      g.beginPath();
+      g.arc(r() * S, r() * S, 1.1 + r() * 1.1, 0, Math.PI * 2);
+      g.fill();
+    }
+    strandBase = new THREE.CanvasTexture(c);
+    strandBase.wrapS = strandBase.wrapT = THREE.RepeatWrapping;
+  }
+  const key = rx + 'x' + ry;
+  strandBase.userData.clones = strandBase.userData.clones || {};
+  if (!strandBase.userData.clones[key]) {
+    const t = strandBase.clone();
+    t.repeat.set(rx, ry);
+    t.needsUpdate = true;
+    strandBase.userData.clones[key] = t;
+  }
+  return strandBase.userData.clones[key];
+}
+const shellCache = new Map();
+// base: { map } か { color }。i 番目（1..n）の層の材質
+function shellMat(base, i, n, rep) {
+  const h = i / n;
+  const k = 0.66 + 0.46 * h; // 根元は暗く、毛先は明るく → 奥行きが出る
+  const opts = { alphaMap: strandTexture(rep[0], rep[1]), alphaTest: 0.2 + h * 0.66, roughness: 0.95 };
+  if (base.map) return new THREE.MeshStandardMaterial({ ...opts, map: base.map, color: new THREE.Color(k, k, k) });
+  const key = base.color + '|' + i + '|' + n + '|' + rep.join(',');
+  if (!shellCache.has(key)) shellCache.set(key, new THREE.MeshStandardMaterial({ ...opts, color: new THREE.Color(base.color).multiplyScalar(k) }));
+  return shellCache.get(key);
+}
+// 毛の長さ（ローカル座標。頭の半径が0.25前後）
+const FUR_LEN = {
+  shiba: 0.024, poodle: 0.03, golden: 0.034, dachshund: 0.016, chihuahua: 0.016, corgi: 0.022, husky: 0.03, dalmatian: 0.01,
+  pug: 0.012, beagle: 0.015, pomeranian: 0.045, frenchie: 0.012,
+  mike: 0.022, amesho: 0.02, scottish: 0.026, russian: 0.018, siamese: 0.014, munchkin: 0.022, mainecoon: 0.04, kuro: 0.02,
+  persian: 0.05, bengal: 0.014, chatora: 0.022, ragdoll: 0.042,
+};
+
+// ===== 表情 =====
+// eyes: open(ひらいた目) / happy(にっこり ∩) / relax(とじた目 ∪)
+const EXPRESSIONS = {
+  normal: { eyes: 'open', mouth: 'closed', blush: 0 },
+  happy: { eyes: 'open', mouth: 'open', blush: 0.45, eyeScale: 1.06, pupil: 1.15 },
+  joy: { eyes: 'happy', mouth: 'open', blush: 0.75 },
+  purr: { eyes: 'relax', mouth: 'closed', blush: 0.6 },
+  sleep: { eyes: 'relax', mouth: 'closed', blush: 0 },
+  sad: { eyes: 'open', mouth: 'closed', blush: 0, brow: 'sad', eyeScale: 0.85, droop: -1 },
+  angry: { eyes: 'open', mouth: 'open', blush: 0, brow: 'angry', eyeScale: 0.62, pupil: 0.6, droop: 1 },
+  focus: { eyes: 'open', mouth: 'closed', blush: 0, eyeScale: 1.1, pupil: 1.8 },
+  curious: { eyes: 'open', mouth: 'closed', blush: 0.2, eyeScale: 1.1, pupil: 1.25 },
+};
+const POSE_EXP = { happy: 'happy', sleep: 'sleep', playdead: 'sleep', sad: 'sad', angry: 'angry', crouch: 'focus', tilt: 'curious', beg: 'happy', highfive: 'happy', bow: 'happy' };
 
 // ===== 毛並みテクスチャ（Canvasで生成） =====
 function makeFurTexture(breed, part, seed) {
@@ -403,7 +470,7 @@ function poseTable(d) {
     eat: { bodyY: -legL * 0.08, pitch: 0.18, legs: [-0.18, -0.18, -0.18, -0.18], headPitch: 0.95 },
     crouch: { bodyY: -legL * 0.45, pitch: 0.05, legs: [-0.9, -0.9, -1.0, -1.0], headPitch: -0.1, tailBase: 0.3, earPerk: 0.4 },
     tilt: { headRoll: 0.42, headPitch: 0.05 },
-    happy: { headPitch: -0.15, eyeOpen: 0.35, earPerk: 0.3 },
+    happy: { headPitch: -0.15, earPerk: 0.3 },
     sad: { headPitch: 0.35, earPerk: -0.6, tailBase: 1.2 },
     angry: { bodyY: -legL * 0.1, pitch: 0.05, headPitch: -0.05, earPerk: -0.9, tailBase: -0.6 },
   };
@@ -432,6 +499,11 @@ export class PetModel {
     this.lookTarget = null;
     this.anims = [];
     this.tongueOut = false;
+    // 毛の層の数（いまの子は多め、ほかの子・公園の子は少なめで軽く）
+    this.furN = { high: 8, mid: 5, low: 4, off: 0 }[opts.fur || 'high'] ?? 8;
+    this.furHalf = this.furN >= 8 ? 4 : this.furN ? 2 : 0; // 脚・しっぽなど小さい部分の層の数
+    this.furLen = (FUR_LEN[breed.id] ?? (this.isCat ? 0.022 : 0.02)) * 1.45;
+    this.expTemp = null; this.expTimer = 0; this.purrT = 0; this.tailUp = 0; this.blushA = 0;
     this.build();
     this.setGrowth(opts.growth ?? 1);
   }
@@ -447,8 +519,9 @@ export class PetModel {
 
   build() {
     const b = this.breed;
+    // かわいく見えるよう、頭は大きめ・体はまるめ・脚は太め
     const d = {
-      L: b.body.L, H: b.body.H, W: b.body.W, legL: b.legL, legR: b.legR, headR: b.headR,
+      L: b.body.L * 0.96, H: b.body.H * 1.05, W: b.body.W * 1.1, legL: b.legL, legR: b.legR * 1.15, headR: b.headR * 1.12,
     };
     d.pawR = d.legR * 1.3;
     d.baseY = d.legL + d.pawR * 0.6 + d.H * 0.2;
@@ -476,22 +549,22 @@ export class PetModel {
     body.castShadow = true;
     this.bodyPivot.add(body);
     this.bodyMesh = body;
+    this.addFur(body, this.furLen, { map: bodyTex }, [10, 5]);
 
     // ふわふわ（プードル・ポメ・ペルシャ）
     const r = rand(this.seed + 5);
     if (b.fluff) {
-      const fm = mat(col.body);
+      const blobs = [];
       for (let i = 0; i < b.fluff; i++) {
         const th = r() * Math.PI * 2, ph = Math.acos(1 - 2 * (0.05 + r() * 0.8));
         const v = new THREE.Vector3(Math.sin(ph) * Math.cos(th), Math.cos(ph), Math.sin(ph) * Math.sin(th));
         if (v.y < -0.6) continue;
-        const s = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8), fm);
-        const rad = Math.min(d.W, d.H) * (0.18 + r() * 0.08);
-        s.scale.setScalar(rad);
-        s.position.set(v.x * d.W / 2 * 0.88, v.y * d.H / 2 * 0.88, v.z * d.L / 2 * 0.88);
-        s.castShadow = true;
-        this.bodyPivot.add(s);
+        const rad = Math.min(d.W, d.H) * (0.24 + r() * 0.08);
+        blobs.push({ r: rad, pos: new THREE.Vector3(v.x * d.W / 2 * 0.8, v.y * d.H / 2 * 0.8, v.z * d.L / 2 * 0.8) });
       }
+      const fl = this.mergeBlobs(blobs, mat(col.body));
+      this.bodyPivot.add(fl);
+      this.addFur(fl, this.furLen * 1.1, { color: col.body }, [12, 6]);
     }
 
     // 首まわりのふさふさ
@@ -499,14 +572,14 @@ export class PetModel {
     this.neck.position.set(0, d.H * 0.28, d.L * 0.4);
     this.bodyPivot.add(this.neck);
     if (b.ruff) {
-      const rm = mat(b.patterns?.body === 'tabby' ? col.belly : col.belly);
+      const blobs = [];
       for (let i = 0; i < 12; i++) {
         const a = (i / 12) * Math.PI * 2;
-        const s = new THREE.Mesh(new THREE.SphereGeometry(d.headR * 0.32, 10, 8), rm);
-        s.position.set(Math.cos(a) * d.headR * 0.6, Math.sin(a) * d.headR * 0.5 + d.headR * 0.1, d.headR * 0.15 + Math.sin(a) * -0.02);
-        s.castShadow = true;
-        this.neck.add(s);
+        blobs.push({ r: d.headR * 0.32, pos: new THREE.Vector3(Math.cos(a) * d.headR * 0.6, Math.sin(a) * d.headR * 0.5 + d.headR * 0.1, d.headR * 0.15 + Math.sin(a) * -0.02) });
       }
+      const ruff = this.mergeBlobs(blobs, mat(col.belly));
+      this.neck.add(ruff);
+      this.addFur(ruff, this.furLen * 1.3, { color: col.belly }, [10, 5]);
     }
 
     // 頭
@@ -523,6 +596,7 @@ export class PetModel {
     neckMesh.rotation.x = 0.5;
     neckMesh.castShadow = true;
     this.headPivot.add(neckMesh);
+    this.addFur(neckMesh, this.furLen * 0.9, { color: col.head }, [5, 3], this.furHalf);
 
     const hs = this.isCat ? new THREE.Vector3(1.12, 0.95, 0.95) : new THREE.Vector3(1, 1, 1);
     this.headScale = hs;
@@ -532,15 +606,18 @@ export class PetModel {
     head.castShadow = true;
     this.headGroup.add(head);
     this.headMesh = head;
+    const headFur = this.furLen * 0.8;
+    this.addFur(head, headFur, { map: headTex }, [9, 5]);
 
     if (b.headFluff) {
-      const fm = mat(col.head);
+      const blobs = [];
       for (let i = 0; i < 7; i++) {
         const a = (i / 7) * Math.PI * 2;
-        const s = new THREE.Mesh(new THREE.SphereGeometry(d.headR * 0.32, 10, 8), fm);
-        s.position.set(Math.cos(a) * d.headR * 0.4, d.headR * 0.78, Math.sin(a) * d.headR * 0.35 - d.headR * 0.05);
-        this.headGroup.add(s);
+        blobs.push({ r: d.headR * 0.32, pos: new THREE.Vector3(Math.cos(a) * d.headR * 0.4, d.headR * 0.78, Math.sin(a) * d.headR * 0.35 - d.headR * 0.05) });
       }
+      const hf = this.mergeBlobs(blobs, mat(col.head));
+      this.headGroup.add(hf);
+      this.addFur(hf, this.furLen, { color: col.head }, [8, 4]);
     }
 
     // マズル・鼻
@@ -553,81 +630,153 @@ export class PetModel {
       snout.position.set(0, -R * 0.28, R * 0.72 + sz * 0.55);
       snout.castShadow = true;
       this.headGroup.add(snout);
-      const nose = new THREE.Mesh(new THREE.SphereGeometry(sR * 0.38, 14, 10), mat(col.nose, { roughness: 0.3 }));
-      nose.scale.set(1.2, 0.85, 0.9);
-      nose.position.set(0, -R * 0.28 + sR * 0.45, R * 0.72 + sz * 1.45);
+      const mf = this.furLen * 0.35;
+      this.addFur(snout, mf, { color: col.muzzle }, [5, 3], this.furHalf);
+      const nose = new THREE.Mesh(new THREE.SphereGeometry(sR * 0.42, 16, 12), mat(col.nose, { roughness: 0.25 }));
+      nose.scale.set(1.25, 0.85, 0.9);
+      nose.position.set(0, -R * 0.28 + sR * 0.45, R * 0.72 + sz * 1.45 + mf);
       this.headGroup.add(nose);
+      const nhl = new THREE.Mesh(new THREE.SphereGeometry(sR * 0.1, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7 }));
+      nhl.position.set(sR * 0.12, sR * 0.14, sR * 0.33);
+      nose.add(nhl);
+      // 口（ω）とひらいた口
+      const front = R * 0.72 + sz * 1.42 + mf;
+      const mouthY = -R * 0.28 - sR * 0.32;
+      this.mouthClosed = this.buildOmega(sR * 0.26, sR * 0.06, new THREE.Vector3(0, mouthY, front));
+      this.headGroup.add(this.mouthClosed);
+      const open = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 10, 0, Math.PI * 2, Math.PI * 0.45, Math.PI * 0.55), mat('#5a2430', { side: THREE.DoubleSide }));
+      open.scale.set(sR * 0.62, sR * 0.55, sR * 0.5);
+      open.position.set(0, mouthY + sR * 0.08, front - sR * 0.42);
+      open.visible = false;
+      this.headGroup.add(open);
+      this.mouthOpen = open;
       // 舌
       const tongue = new THREE.Mesh(new THREE.SphereGeometry(1, 12, 8), mat('#ef6f86'));
-      tongue.scale.set(sR * 0.45, sR * 0.12, sR * 0.6);
-      tongue.position.set(0, -R * 0.28 - sR * 0.75, R * 0.72 + sz * 1.0);
-      tongue.rotation.x = 0.5;
+      tongue.scale.set(sR * 0.4, sR * 0.11, sR * 0.55);
+      tongue.position.set(0, mouthY - sR * 0.32, front - sR * 0.32);
+      tongue.rotation.x = 0.6;
       tongue.visible = false;
       this.headGroup.add(tongue);
       this.tongue = tongue;
     } else {
       const mm = mat(col.muzzle);
+      const hfz = headFur * 0.7;
       for (const s of [-1, 1]) {
         const m = new THREE.Mesh(new THREE.SphereGeometry(b.snout.R * 0.62, 14, 10), mm);
-        m.position.set(s * b.snout.R * 0.48, -R * 0.3, R * 0.8 + b.snout.L * 0.4);
+        m.position.set(s * b.snout.R * 0.48, -R * 0.3, R * 0.8 + b.snout.L * 0.4 + hfz);
         m.scale.set(1, 0.85, 0.8);
         this.headGroup.add(m);
+        this.addFur(m, this.furLen * 0.3, { color: col.muzzle }, [4, 3], this.furHalf);
       }
       const chin = new THREE.Mesh(new THREE.SphereGeometry(b.snout.R * 0.45, 12, 8), mm);
-      chin.position.set(0, -R * 0.44, R * 0.76 + b.snout.L * 0.3);
+      chin.position.set(0, -R * 0.44, R * 0.76 + b.snout.L * 0.3 + hfz);
       this.headGroup.add(chin);
-      const nose = new THREE.Mesh(new THREE.SphereGeometry(R * 0.07, 10, 8), mat(col.nose, { roughness: 0.4 }));
-      nose.scale.set(1.3, 0.8, 0.8);
-      nose.position.set(0, -R * 0.17, R * 0.92 + b.snout.L * 0.45);
+      const nose = new THREE.Mesh(new THREE.SphereGeometry(R * 0.075, 12, 10), mat(col.nose, { roughness: 0.35 }));
+      nose.scale.set(1.35, 0.8, 0.8);
+      nose.position.set(0, -R * 0.17, R * 0.92 + b.snout.L * 0.45 + hfz + this.furLen * 0.3);
       this.headGroup.add(nose);
+      // 口（ω）とひらいた口
+      const mz = R * 0.9 + b.snout.L * 0.55 + hfz + this.furLen * 0.3;
+      const my = -R * 0.3;
+      this.mouthClosed = this.buildOmega(R * 0.06, R * 0.012, new THREE.Vector3(0, my, mz));
+      const phil = new THREE.Mesh(new THREE.CapsuleGeometry(R * 0.01, R * 0.06, 3, 6), mat('#5a3a3a'));
+      phil.position.set(0, R * 0.075, -R * 0.005);
+      this.mouthClosed.add(phil);
+      this.headGroup.add(this.mouthClosed);
+      const open = new THREE.Mesh(new THREE.SphereGeometry(1, 14, 10), mat('#7a2e3a'));
+      open.scale.set(R * 0.075, R * 0.06, R * 0.03);
+      open.position.set(0, my - R * 0.06, mz - R * 0.02);
+      open.visible = false;
+      this.headGroup.add(open);
+      this.mouthOpen = open;
       // ひげ
       const wm = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.8 });
       for (const s of [-1, 1]) {
         for (let i = 0; i < 3; i++) {
           const pts = [
-            new THREE.Vector3(s * b.snout.R * 0.7, -R * 0.3, R * 0.85 + b.snout.L * 0.4),
+            new THREE.Vector3(s * b.snout.R * 0.7, -R * 0.3, R * 0.85 + b.snout.L * 0.4 + hfz),
             new THREE.Vector3(s * R * 1.25, -R * 0.22 - i * R * 0.08 + 0.02, R * 0.7),
           ];
           this.headGroup.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), wm));
         }
       }
       const tongue = new THREE.Mesh(new THREE.SphereGeometry(1, 10, 8), mat('#ef6f86'));
-      tongue.scale.set(R * 0.07, R * 0.03, R * 0.09);
-      tongue.position.set(0, -R * 0.45, R * 0.9 + b.snout.L * 0.4);
+      tongue.scale.set(R * 0.05, R * 0.02, R * 0.06);
+      tongue.position.set(0, my - R * 0.085, mz - R * 0.01);
       tongue.visible = false;
       this.headGroup.add(tongue);
       this.tongue = tongue;
     }
 
-    // 目
-    this.eyes = [];
-    const eyeR = R * (b.bigEyes ? 0.17 : 0.135) * (this.isCat ? 1.1 : 1);
+    // 目（大きめ・うるうる）
+    this.eyes = []; this.eyeOpenG = []; this.eyeHappy = []; this.eyeRelax = []; this.brows = []; this.pupils = [];
+    const big = b.bigEyes ? 1.15 : 1;
+    const eyeR = R * (this.isCat ? 0.19 : 0.16) * big;
+    this.eyeR = eyeR;
+    const irisCol = b.coloredIris ? col.eye : '#4a2c17';
+    const lineMat = mat('#2a1a12', { roughness: 0.6 });
+    const white = new THREE.MeshBasicMaterial({ color: 0xffffff });
     for (const s of [-1, 1]) {
       const eg = new THREE.Group();
-      const ex = 0.4 * (this.isCat ? 1.05 : 1), ey = this.isCat ? 0.1 : 0.17;
+      const ex = this.isCat ? 0.42 : 0.4, ey = this.isCat ? 0.05 : 0.1;
       const ez = Math.sqrt(Math.max(0.05, 1 - ex * ex - ey * ey));
-      eg.position.set(s * ex * R * hs.x, ey * R * hs.y, ez * R * hs.z * 0.97);
+      const rr = R + headFur * 0.95;
+      eg.position.set(s * ex * rr * hs.x, ey * rr * hs.y, ez * rr * hs.z * 0.97);
       eg.lookAt(eg.position.clone().multiply(new THREE.Vector3(1.6, 0.6, 1)).add(new THREE.Vector3(0, 0, R * 2)));
-      if (b.coloredIris) {
-        const iris = new THREE.Mesh(new THREE.SphereGeometry(eyeR, 16, 12), mat(col.eye, { roughness: 0.25 }));
-        iris.scale.z = 0.55;
-        eg.add(iris);
-        const pupil = new THREE.Mesh(new THREE.SphereGeometry(eyeR, 14, 10), mat('#0b0b0f', { roughness: 0.2 }));
-        pupil.scale.set(this.isCat ? 0.42 : 0.55, this.isCat ? 0.88 : 0.55, 0.3);
-        pupil.position.z = eyeR * 0.38;
-        eg.add(pupil);
-        this.pupils = this.pupils || [];
-        this.pupils.push(pupil);
-      } else {
-        const ball = new THREE.Mesh(new THREE.SphereGeometry(eyeR, 16, 12), mat('#120c08', { roughness: 0.2 }));
-        ball.scale.z = 0.6;
-        eg.add(ball);
-      }
-      const hl = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.3, 8, 6), new THREE.MeshBasicMaterial({ color: 0xffffff }));
-      hl.position.set(eyeR * 0.3, eyeR * 0.35, eyeR * 0.5);
-      eg.add(hl);
+      const open = new THREE.Group();
+      eg.add(open);
+      // 縁取り（くっきり見せる）
+      const rim = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 1.08, 18, 12), mat('#120a06', { roughness: 0.3 }));
+      rim.scale.z = 0.45;
+      rim.position.z = -eyeR * 0.05;
+      open.add(rim);
+      const iris = new THREE.Mesh(new THREE.SphereGeometry(eyeR, 18, 14), mat(irisCol, { roughness: 0.12 }));
+      iris.scale.z = 0.5;
+      open.add(iris);
+      const pupil = new THREE.Mesh(new THREE.SphereGeometry(eyeR, 16, 12), mat('#050505', { roughness: 0.1 }));
+      pupil.userData.base = this.isCat ? new THREE.Vector3(0.42, 0.9, 0.3) : new THREE.Vector3(0.62, 0.62, 0.3);
+      pupil.scale.copy(pupil.userData.base);
+      pupil.position.z = eyeR * 0.28;
+      open.add(pupil);
+      this.pupils.push(pupil);
+      // ハイライト（大・小）でうるうるに
+      const hl = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.3, 10, 8), white);
+      hl.position.set(-eyeR * 0.3, eyeR * 0.36, eyeR * 0.5);
+      open.add(hl);
+      const hl2 = new THREE.Mesh(new THREE.SphereGeometry(eyeR * 0.13, 8, 6), white);
+      hl2.position.set(eyeR * 0.32, -eyeR * 0.34, eyeR * 0.48);
+      open.add(hl2);
+      // にっこり目（∩）・とじた目（∪）
+      const happy = new THREE.Mesh(new THREE.TorusGeometry(eyeR * 0.72, eyeR * 0.15, 6, 20, Math.PI), lineMat);
+      happy.position.set(0, -eyeR * 0.3, eyeR * 0.3);
+      happy.visible = false;
+      eg.add(happy);
+      const relax = new THREE.Mesh(new THREE.TorusGeometry(eyeR * 0.72, eyeR * 0.14, 6, 20, Math.PI), lineMat);
+      relax.rotation.z = Math.PI;
+      relax.position.set(0, eyeR * 0.2, eyeR * 0.3);
+      relax.visible = false;
+      eg.add(relax);
+      // まゆ（かなしい・おこる時だけ）
+      const brow = new THREE.Mesh(new THREE.CapsuleGeometry(eyeR * 0.15, eyeR * 0.75, 3, 8), mat(shade(col.head, -0.45)));
+      brow.position.set(0, eyeR * 1.35, eyeR * 0.2);
+      brow.visible = false;
+      brow.userData.side = s;
+      eg.add(brow);
+      eg.userData.side = s;
       this.headGroup.add(eg);
-      this.eyes.push(eg);
+      this.eyes.push(eg); this.eyeOpenG.push(open); this.eyeHappy.push(happy); this.eyeRelax.push(relax); this.brows.push(brow);
+    }
+    // ほっぺ（うれしい時にぽっ）
+    this.blushMat = new THREE.MeshBasicMaterial({ color: '#ff8fa3', transparent: true, opacity: 0, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -2 });
+    for (const s of [-1, 1]) {
+      const bx = 0.6, by = this.isCat ? -0.18 : -0.12;
+      const bz = Math.sqrt(Math.max(0.05, 1 - bx * bx - by * by));
+      const rr = R + headFur * 0.95;
+      const bl = new THREE.Mesh(new THREE.CircleGeometry(R * 0.12, 20), this.blushMat);
+      bl.position.set(s * bx * rr * hs.x, by * rr * hs.y, bz * rr * hs.z);
+      bl.lookAt(bl.position.clone().multiplyScalar(2));
+      bl.scale.y = 0.7;
+      this.headGroup.add(bl);
     }
 
     // 耳
@@ -700,16 +849,18 @@ export class PetModel {
     for (const [sx, sz] of legPos) {
       const lg = new THREE.Group();
       lg.position.set(sx * d.W * 0.28, -d.H * 0.2, sz * d.L * 0.33);
-      const leg = new THREE.Mesh(new THREE.CylinderGeometry(d.legR * 1.15, d.legR, d.legL, 12), legMat);
+      const leg = new THREE.Mesh(new THREE.CapsuleGeometry(d.legR * 1.08, Math.max(0.01, d.legL - d.legR * 1.6), 4, 12), legMat);
       leg.position.y = -d.legL / 2;
       leg.castShadow = true;
       lg.add(leg);
+      this.addFur(leg, this.furLen * 0.6, { color: col.legs }, [3, 4], this.furHalf);
       if (sz < 0 || b.fluff) {
         const thigh = new THREE.Mesh(new THREE.SphereGeometry(d.legR * (sz < 0 ? 2.0 : 1.6), 12, 10), sz < 0 ? mat(col.body) : legMat);
         thigh.position.y = -d.legL * 0.05;
         thigh.scale.set(0.9, 1.3, 1.1);
         thigh.castShadow = true;
         lg.add(thigh);
+        this.addFur(thigh, this.furLen * 0.8, { color: sz < 0 ? col.body : col.legs }, [4, 3], this.furHalf);
       }
       if (b.fluff) {
         const f = new THREE.Mesh(new THREE.SphereGeometry(d.legR * 1.7, 10, 8), legMat);
@@ -751,6 +902,58 @@ export class PetModel {
     }
   }
 
+  // mesh に毛の層を重ねる（len: 毛の長さ / base: 色 or テクスチャ / rep: 毛の細かさ / n: 層の数）
+  addFur(mesh, len, base, rep = [4, 2], n = this.furN) {
+    if (!n || len <= 0) return;
+    const g = mesh.geometry;
+    if (!g.boundingBox) g.computeBoundingBox();
+    const c = g.boundingBox.getCenter(new THREE.Vector3());
+    const hs = g.boundingBox.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+    const sc = mesh.scale;
+    const f = (half, s) => { const e = Math.max(1e-4, half * Math.abs(s)); return off => (e + off) / e; };
+    const fx = f(hs.x, sc.x), fy = f(hs.y, sc.y), fz = f(hs.z, sc.z);
+    for (let i = 1; i <= n; i++) {
+      const off = len * i / n;
+      const sh = new THREE.Mesh(g, shellMat(base, i, n, rep));
+      const kx = fx(off), ky = fy(off), kz = fz(off);
+      sh.scale.set(kx, ky, kz);
+      sh.position.set(c.x * (1 - kx), c.y * (1 - ky), c.z * (1 - kz));
+      sh.userData.fur = true;
+      mesh.add(sh);
+    }
+  }
+  // いくつかの球を1つにまとめる（ふわふわの毛玉を軽く描くため）
+  mergeBlobs(list, material) {
+    const geos = list.map(({ r, pos, scale }) => {
+      const g = new THREE.SphereGeometry(1, 10, 8);
+      g.scale(scale ? scale.x * r : r, scale ? scale.y * r : r, scale ? scale.z * r : r);
+      g.translate(pos.x, pos.y, pos.z);
+      return g;
+    });
+    const merged = mergeGeometries(geos);
+    geos.forEach(g => g.dispose());
+    const m = new THREE.Mesh(merged, material);
+    m.castShadow = true;
+    return m;
+  }
+  // ω の口
+  buildOmega(r, tube, pos) {
+    const g = new THREE.Group();
+    const lm = mat('#4a2c2c', { roughness: 0.6 });
+    for (const s of [-1, 1]) {
+      const a = new THREE.Mesh(new THREE.TorusGeometry(r, tube, 5, 14, Math.PI), lm);
+      a.rotation.z = Math.PI;
+      a.position.set(s * r, 0, 0);
+      g.add(a);
+    }
+    g.position.copy(pos);
+    return g;
+  }
+  // 一時的な表情（sec 秒）
+  setExpression(name, sec = 1.5) { this.expTemp = name; this.expTimer = sec; }
+  // ゴロゴロ（ねこ）
+  purr(sec = 2.5) { this.purrT = Math.max(this.purrT, sec); this.setExpression('purr', sec); }
+
   buildTail() {
     const b = this.breed, d = this.d, col = b.colors;
     const t = b.tail;
@@ -791,11 +994,14 @@ export class PetModel {
       }
       mesh.castShadow = true;
       seg.add(mesh);
+      const fluffyTail = ['bushy', 'catbushy', 'fluffy', 'pom'].includes(t.type);
+      this.addFur(mesh, this.furLen * (fluffyTail ? 1.8 : 0.9), { color }, [3, 4], this.furHalf);
       if (t.type === 'pom') {
         const pom = new THREE.Mesh(new THREE.SphereGeometry(t.R * 2.2, 12, 10), mat(color));
         pom.position.y = segL;
         pom.castShadow = true;
         seg.add(pom);
+        this.addFur(pom, this.furLen * 1.6, { color }, [4, 3], this.furHalf);
       }
       seg.userData.curl = cfg.curls ? cfg.curls[i] : (i === 0 ? 0 : cfg.curl);
       parent.add(seg);
@@ -829,6 +1035,11 @@ export class PetModel {
       }
     }
 
+    // いまの表情
+    if (this.expTimer > 0) { this.expTimer -= dt; if (this.expTimer <= 0) this.expTemp = null; }
+    const exName = this.expTemp || POSE_EXP[this.poseName] || 'normal';
+    const E = EXPRESSIONS[exName] || EXPRESSIONS.normal;
+
     // 歩行サイクル
     const sp = this.walkSpeed;
     this.walkPhase += dt * (6 + sp * 6) * Math.min(1, sp * 3);
@@ -860,6 +1071,15 @@ export class PetModel {
     this.bodyMesh.scale.y = (this.d.H / 2) * (1 + breath);
 
     this.bodyPivot.position.y = this.d.baseY + c.bodyY + bob + jumpY;
+    // ゴロゴロ中は体が小さくふるえる
+    if (this.purrT > 0) {
+      this.purrT -= dt;
+      this.bodyPivot.position.x = Math.sin(this.time * 90) * 0.0028;
+      this.bodyMesh.scale.y *= 1 + Math.sin(this.time * 26) * 0.012;
+    } else this.bodyPivot.position.x = 0;
+    // うれしい犬はおしりもふりふり
+    const wig = this.isCat ? 0 : Math.min(1, Math.max(0, this.wagAmp - 0.7) / 0.4);
+    this.bodyPivot.rotation.y = Math.sin(this.time * 11 + 1.6) * 0.08 * wig;
     this.bodyPivot.rotation.x = c.pitch - tuck * 0.15;
     this.bodyPivot.rotation.z = c.roll + rollA + shakeA;
     this.spinner.rotation.y = spin;
@@ -885,15 +1105,21 @@ export class PetModel {
 
     // しっぽ
     const cfg = this.tailCfg;
-    const wagFreq = this.isCat ? 2.2 : 11;
-    const wag = Math.sin(this.time * wagFreq) * this.wagAmp;
+    const wagFreq = this.isCat ? 2.2 : 9 + Math.min(1.2, this.wagAmp) * 5;
+    this._wagPh = (this._wagPh || 0) + dt * wagFreq;
+    const wag = Math.sin(this._wagPh) * Math.min(1.2, this.wagAmp);
+    // ねこはうれしいとしっぽをピンと立てて、先をくるっと
+    const tailHappy = this.isCat && ['happy', 'joy', 'purr', 'curious'].includes(exName) && !['sleep', 'down', 'playdead', 'crouch'].includes(this.poseName);
+    this.tailUp += ((tailHappy ? 1 : 0) - this.tailUp) * Math.min(1, dt * 3);
+    const n = this.tailSegs.length;
     this.tailSegs.forEach((s, i) => {
       if (i === 0) {
-        s.rotation.x = cfg.base + c.tailBase * (this.isCat ? 0.4 : 0.6);
-        s.rotation.z = wag * (this.isCat ? 0.5 : 1);
+        const bx = cfg.base + c.tailBase * (this.isCat ? 0.4 : 0.6);
+        s.rotation.x = THREE.MathUtils.lerp(bx, -0.08, this.tailUp);
+        s.rotation.z = wag * (this.isCat ? 0.5 * (1 - this.tailUp * 0.7) : 1);
       } else {
-        s.rotation.x = s.userData.curl;
-        s.rotation.z = this.isCat ? Math.sin(this.time * wagFreq - i * 0.6) * this.wagAmp * 0.45 : wag * 0.15;
+        s.rotation.x = THREE.MathUtils.lerp(s.userData.curl, i >= n - 2 ? 0.6 : 0.02, this.tailUp);
+        s.rotation.z = this.isCat ? Math.sin(this._wagPh - i * 0.6) * this.wagAmp * 0.45 * (1 - this.tailUp * 0.6) : wag * 0.15;
       }
     });
 
@@ -910,16 +1136,42 @@ export class PetModel {
       }
     }
 
-    // まばたき
+    // 目（まばたき・表情）
     this.blinkT -= dt;
-    let eyeS = c.eyeOpen;
+    let blink = 1;
     if (this.blinkT < 0) {
-      eyeS = Math.min(eyeS, 0.1);
+      blink = 0.08;
       if (this.blinkT < -0.12) this.blinkT = 2 + Math.random() * 4;
     }
-    for (const e of this.eyes) e.scale.y = Math.max(0.06, eyeS);
+    const es = E.eyeScale || 1;
+    const openS = Math.max(0.06, Math.min(c.eyeOpen, blink) * es);
+    const ek = 1 - Math.exp(-dt * 12);
+    this.eyes.forEach((eg, i) => {
+      const s = eg.userData.side;
+      const o = this.eyeOpenG[i];
+      o.visible = E.eyes === 'open';
+      this.eyeHappy[i].visible = E.eyes === 'happy';
+      this.eyeRelax[i].visible = E.eyes === 'relax';
+      o.scale.y = blink < 1 ? openS : o.scale.y + (openS - o.scale.y) * ek;
+      o.scale.x += ((1 + (es - 1) * 0.5) - o.scale.x) * ek;
+      o.rotation.z += ((E.droop || 0) * s * 0.3 - o.rotation.z) * ek;
+      const br = this.brows[i];
+      br.visible = !!E.brow && E.eyes === 'open';
+      br.rotation.z = Math.PI / 2 + (E.brow === 'sad' ? -s : s) * 0.45;
+      const pu = this.pupils[i], pb = pu.userData.base, pk = E.pupil || 1;
+      const tx = this.isCat ? Math.min(0.88, pb.x * pk) : pb.x * Math.min(1.25, pk);
+      const ty = this.isCat ? pb.y : pb.y * Math.min(1.25, pk);
+      pu.scale.x += (tx - pu.scale.x) * ek;
+      pu.scale.y += (ty - pu.scale.y) * ek;
+    });
 
-    if (this.tongue) this.tongue.visible = this.tongueOut;
+    // 口・舌・ほっぺ
+    const mouthOpen = E.mouth === 'open' || this.tongueOut;
+    if (this.mouthOpen) this.mouthOpen.visible = mouthOpen;
+    if (this.mouthClosed) this.mouthClosed.visible = !mouthOpen;
+    if (this.tongue) this.tongue.visible = this.tongueOut || (!this.isCat && mouthOpen && exName !== 'angry');
+    this.blushA += ((E.blush || 0) - this.blushA) * Math.min(1, dt * 4);
+    this.blushMat.opacity = this.blushA * 0.55;
   }
 
   headWorldPos(out = new THREE.Vector3()) {
