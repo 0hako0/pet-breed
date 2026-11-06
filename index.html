@@ -11,13 +11,20 @@
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=M+PLUS+Rounded+1c:wght@500;700;800&display=swap" rel="stylesheet" />
-  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/style.css?v=20261106122003" />
   <!-- 3Dエンジン: three.js r160 (MIT License) を CDN から読み込み -->
   <script type="importmap">
     {
       "imports": {
         "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
-        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/",
+        "./js/main.js": "./js/main.js?v=20261106122003",
+        "./js/breeds.js": "./js/breeds.js?v=20261106122003",
+        "./js/petModel.js": "./js/petModel.js?v=20261106122003",
+        "./js/world.js": "./js/world.js?v=20261106122003",
+        "./js/furniture.js": "./js/furniture.js?v=20261106122003",
+        "./js/game.js": "./js/game.js?v=20261106122003",
+        "./js/audio.js": "./js/audio.js?v=20261106122003"
       }
     }
   </script>
@@ -143,6 +150,7 @@
     <div id="fade"></div>
     <div id="loading">よみこみ中…</div>
   </div>
-  <script type="module" src="js/main.js"></script>
+  <!-- ?v= はバージョン番号（tools/bump-version.sh で更新）。古いファイルとの混ざりを防ぐ -->
+  <script type="module" src="js/main.js?v=20261106122003"></script>
 </body>
 </html>

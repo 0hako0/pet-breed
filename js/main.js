@@ -757,7 +757,7 @@ function placeBrushOnBack(t) {
   _bp.m.makeBasis(hx, hy, hz);
   brush.quaternion.setFromRotationMatrix(_bp.m);
   // 毛先が毛に少し沈むくらい（0.08）。戻るときは持ち上げる
-  brush.position.copy(_bp.a).addScaledVector(up, (0.08 + lift * 0.07) * k);
+  brush.position.copy(_bp.a).addScaledVector(up, (0.088 + lift * 0.07) * k);
   // 少し傾けてなでる感じ
   brush.rotateZ(ph < down ? 0.12 : -0.08);
 }
