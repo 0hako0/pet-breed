@@ -717,6 +717,50 @@ function doBath() {
   });
 }
 let brush = null, brushAnim = null;
+// ブラシを背中の毛の上に置く: 首→しっぽへ毛並みにそってなで、持ち上げて戻す
+// 体は bodyPivot 上の楕円体（半径 W/2, H/2, L/2、前後は z' = |z|^0.72 で引きのばし）
+const _bp = { a: new THREE.Vector3(), b: new THREE.Vector3(), up: new THREE.Vector3(), q: new THREE.Quaternion(), sc: new THREE.Vector3(), m: new THREE.Matrix4(), x: new THREE.Vector3() };
+function backPoint(u, out) {
+  const d = model.d;
+  const z0 = Math.pow(Math.abs(u), 1 / 0.72);
+  const y = Math.sqrt(Math.max(0, 1 - z0 * z0)) * d.H / 2 + model.furLen;
+  return out.set(0, y, u * d.L / 2);
+}
+function placeBrushOnBack(t) {
+  const piv = model.bodyPivot;
+  piv.updateWorldMatrix(true, false);
+  piv.getWorldQuaternion(_bp.q);
+  piv.getWorldScale(_bp.sc);
+  const ws = _bp.sc.x;
+  const sitting = model.poseName === 'sit';
+  const u0 = 0.38, u1 = sitting ? -0.32 : -0.5; // おすわり中はおしりの手前まで
+  const T = 0.8, ph = (t % T) / T, down = 0.7;
+  let u, lift;
+  if (ph < down) { const k = ph / down; u = u0 + (u1 - u0) * (0.5 - Math.cos(k * Math.PI) / 2); lift = 0; }
+  else { const k = (ph - down) / (1 - down); u = u1 + (u0 - u1) * k; lift = Math.sin(k * Math.PI); }
+  // 表面の点と、毛並みの向き（前→後ろ）
+  backPoint(u, _bp.a); piv.localToWorld(_bp.a);
+  backPoint(u - 0.06, _bp.b); piv.localToWorld(_bp.b);
+  const fwd = _bp.b.sub(_bp.a).normalize();           // しっぽ向き
+  const up = _bp.up.set(0, 1, 0).applyQuaternion(_bp.q);
+  up.addScaledVector(fwd, -up.dot(fwd)).normalize();   // 表面の法線（だいたい）
+  const side = _bp.x.crossVectors(up, fwd).normalize();
+  // ブラシの大きさは体の幅に合わせる（ブラシの頭は幅0.22）
+  const k = THREE.MathUtils.clamp(model.d.W * ws * 0.7 / 0.22, 0.3, 1.0);
+  brush.scale.setScalar(k);
+  // ブラシのローカル: 毛は -y（先端 -0.095）、持ち手は +z。
+  // 持ち手は見ている人の側・ななめ上へ（人がそちらから持ってなでる感じ）
+  if (side.dot(_bp.b.copy(camera.position).sub(_bp.a)) < 0) side.negate();
+  // 頭は背中に平ら（y = 法線）、持ち手（+z）は見ている人の側へ。持ち手自体がななめ上に曲がっている
+  const hz = side, hy = up;
+  const hx = new THREE.Vector3().crossVectors(hy, hz);
+  _bp.m.makeBasis(hx, hy, hz);
+  brush.quaternion.setFromRotationMatrix(_bp.m);
+  // 毛先が毛に少し沈むくらい（0.08）。戻るときは持ち上げる
+  brush.position.copy(_bp.a).addScaledVector(up, (0.08 + lift * 0.07) * k);
+  // 少し傾けてなでる感じ
+  brush.rotateZ(ph < down ? 0.12 : -0.08);
+}
 function doBrush() {
   if (!ready()) return;
   const p = curPet();
@@ -2824,13 +2868,7 @@ function animate() {
     }
     if (brushAnim) {
       brushAnim.t += dt;
-      const bp = model.bodyPivot.getWorldPosition(tmpV);
-      const s = ctrl.scale;
-      const d = model.d;
-      const fwd = new THREE.Vector3(Math.sin(ctrl.heading), 0, Math.cos(ctrl.heading));
-      brush.position.copy(bp).addScaledVector(fwd, Math.sin(brushAnim.t * 5) * d.L * 0.3 * s);
-      brush.position.y = bp.y + (d.H * 0.5 + 0.08) * s + Math.abs(Math.cos(brushAnim.t * 5)) * 0.05;
-      brush.rotation.y = ctrl.heading;
+      placeBrushOnBack(brushAnim.t);
     }
   }
 

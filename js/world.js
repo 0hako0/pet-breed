@@ -801,8 +801,10 @@ export function makeBathtub() {
 
 export function makeBrush() {
   const g = new THREE.Group();
+  // 持ち手はななめ上に（ブラシの頭を毛に平らに当てたまま持てるように）
   const handle = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 0.45), m('#ff8fab'));
-  handle.position.z = 0.25;
+  handle.position.set(0, 0.11, 0.33);
+  handle.rotation.x = -0.6;
   g.add(handle);
   const head = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.06, 0.28), m('#ff8fab'));
   g.add(head);
