@@ -165,6 +165,8 @@ function refreshUI() {
 
 // ================= ペットの動きを制御するコントローラー =================
 class Cancelled extends Error {}
+// 歩くときには解除するポーズ（crouch=しのび足、happy/tilt は歩いても自然なので残す）
+const STILL_POSES = new Set(['sit', 'paw', 'paw2', 'highfive', 'beg', 'down', 'sleep', 'playdead', 'bow', 'eat', 'angry']);
 class Ctrl {
   constructor(pet = null) {
     this.model = null; this.gen = 0; this.timers = []; this.move = null; this.busy = false;
@@ -292,6 +294,8 @@ class Ctrl {
         this.pos.y = 0;
         this.targetHeading = Math.atan2(dx, dz);
         m.walkSpeed = this.move.run ? 1.7 : 0.75;
+        // おすわり・ふせなど止まったままのポーズなら立ち上がってから歩く
+        if (STILL_POSES.has(m.poseName)) m.setPose('stand');
         if (mode === 'park') pushOut(this.pos, park.obstacles);
         else pushOut(this.pos, ROOM_OBST);
       }
