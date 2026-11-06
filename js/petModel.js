@@ -719,8 +719,8 @@ export class PetModel {
       const eg = new THREE.Group();
       const ex = this.isCat ? 0.42 : 0.4, ey = this.isCat ? 0.02 : 0.08;
       const ez = Math.sqrt(Math.max(0.05, 1 - ex * ex - ey * ey));
-      // 毛の層より外に出して、毛が目にかぶらないように
-      const rr = R + headFur * 1.25 + R * 0.02;
+      // 頭の表面すぐ上に貼る（毛の外に出すと横から見て浮くので、かわりに目のまわりの毛を短くする）
+      const rr = R * 1.02;
       eg.position.set(s * ex * rr * hs.x, ey * rr * hs.y, ez * rr * hs.z * 0.97);
       eg.lookAt(eg.position.clone().multiply(new THREE.Vector3(1.25, 0.6, 1)).add(new THREE.Vector3(0, 0, R * 2)));
       const cv = document.createElement('canvas');
@@ -729,8 +729,23 @@ export class PetModel {
       tex.colorSpace = THREE.SRGBColorSpace;
       tex.anisotropy = 4;
       const pm = new THREE.MeshStandardMaterial({ map: tex, transparent: true, alphaTest: 0.05, roughness: 0.35, emissive: '#ffffff', emissiveMap: tex, emissiveIntensity: 0.22, depthWrite: true });
-      const plane = new THREE.Mesh(new THREE.PlaneGeometry(eyeR * 2.6, eyeR * 2.6), pm);
+      const plane = new THREE.Mesh(new THREE.PlaneGeometry(eyeR * 2.6, eyeR * 2.6, 12, 12), pm);
       plane.position.z = eyeR * 0.05;
+      // 平らな板のままだと横から見たとき頭の輪郭からはみ出すので、頭の丸み（楕円体）に沿わせて曲げる
+      {
+        eg.updateMatrix(); plane.updateMatrix();
+        const M = eg.matrix.clone().multiply(plane.matrix), Mi = M.clone().invert();
+        const gp = plane.geometry.attributes.position, v = new THREE.Vector3();
+        for (let i = 0; i < gp.count; i++) {
+          v.fromBufferAttribute(gp, i).applyMatrix4(M);
+          v.divide(hs).setLength(rr).multiply(hs);
+          v.applyMatrix4(Mi);
+          gp.setXYZ(i, v.x, v.y, v.z);
+        }
+        gp.needsUpdate = true;
+        plane.geometry.computeVertexNormals();
+        plane.geometry.computeBoundingSphere();
+      }
       plane.userData = { cv, tex, side: s };
       eg.add(plane);
       eg.userData.side = s;
@@ -738,6 +753,8 @@ export class PetModel {
       this.eyes.push(eg);
       this.eyePlanes.push(plane);
     }
+    // 目のまわりは毛を短く（毛の層を目の位置で切り抜く）
+    this.trimFurAroundEyes(head, this.eyes.map(e => e.position.clone().divide(hs).normalize()), eyeR / R);
     this._eyeKey = '';
     this.drawEyes(EXPRESSIONS.normal);
 
@@ -746,7 +763,7 @@ export class PetModel {
     for (const s of [-1, 1]) {
       const bx = 0.6, by = this.isCat ? -0.18 : -0.12;
       const bz = Math.sqrt(Math.max(0.05, 1 - bx * bx - by * by));
-      const rr = R + headFur * 0.95;
+      const rr = R + headFur * 0.6;
       const bl = new THREE.Mesh(new THREE.CircleGeometry(R * 0.12, 20), this.blushMat);
       bl.position.set(s * bx * rr * hs.x, by * rr * hs.y, bz * rr * hs.z);
       bl.lookAt(bl.position.clone().multiplyScalar(2));
@@ -875,6 +892,34 @@ export class PetModel {
       acc.traverse(o => { if (o.isMesh) o.castShadow = true; });
       this.accessoryGroup.push(acc);
     }
+  }
+
+  // 頭の毛の層を目のまわりだけ切り抜く。目の中心では全部の層、ふちでは外側の層だけ消す（毛が短くなる）
+  // dirs: 頭メッシュのローカルで見た目の中心の向き / ang: 目の大きさ（角度、ラジアン）
+  trimFurAroundEyes(head, dirs, ang) {
+    const cosIn = Math.cos(ang * 1.05), cosOut = Math.cos(ang * 1.9);
+    const shells = head.children.filter(o => o.userData.fur);
+    shells.forEach((sh, idx) => {
+      const h = (idx + 1) / shells.length;
+      const m = sh.material;
+      m.onBeforeCompile = shader => {
+        shader.uniforms.eyeA = { value: dirs[0] };
+        shader.uniforms.eyeB = { value: dirs[1] };
+        shader.uniforms.eyeCos = { value: new THREE.Vector2(cosOut, cosIn) };
+        shader.uniforms.shellH = { value: h };
+        shader.vertexShader = shader.vertexShader
+          .replace('#include <common>', '#include <common>\nvarying vec3 vLP;')
+          .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLP = position;');
+        shader.fragmentShader = shader.fragmentShader
+          .replace('#include <common>', '#include <common>\nvarying vec3 vLP;\nuniform vec3 eyeA;\nuniform vec3 eyeB;\nuniform vec2 eyeCos;\nuniform float shellH;')
+          .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+            vec3 dn = normalize(vLP);
+            float near = max(smoothstep(eyeCos.x, eyeCos.y, dot(dn, eyeA)), smoothstep(eyeCos.x, eyeCos.y, dot(dn, eyeB)));
+            if (shellH > 1.0 - near * 1.02) discard;`);
+      };
+      m.customProgramCacheKey = () => 'eyetrim';
+      m.needsUpdate = true;
+    });
   }
 
   // mesh に毛の層を重ねる（len: 毛の長さ / base: 色 or テクスチャ / rep: 毛の細かさ / n: 層の数）
