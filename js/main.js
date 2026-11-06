@@ -723,7 +723,7 @@ const _bp = { a: new THREE.Vector3(), b: new THREE.Vector3(), up: new THREE.Vect
 function backPoint(u, out) {
   const d = model.d;
   const z0 = Math.pow(Math.abs(u), 1 / 0.72);
-  const y = Math.sqrt(Math.max(0, 1 - z0 * z0)) * d.H / 2 + model.furLen;
+  const y = Math.sqrt(Math.max(0, 1 - z0 * z0)) * d.H / 2; // 体の表面（毛先はまばらなので、毛の根元までブラシの毛を入れる）
   return out.set(0, y, u * d.L / 2);
 }
 function placeBrushOnBack(t) {
@@ -734,7 +734,7 @@ function placeBrushOnBack(t) {
   const ws = _bp.sc.x;
   const sitting = model.poseName === 'sit';
   const u0 = 0.38, u1 = sitting ? -0.32 : -0.5; // おすわり中はおしりの手前まで
-  const T = 0.8, ph = (t % T) / T, down = 0.7;
+  const T = 0.8, ph = (t % T) / T, down = 0.8;
   let u, lift;
   if (ph < down) { const k = ph / down; u = u0 + (u1 - u0) * (0.5 - Math.cos(k * Math.PI) / 2); lift = 0; }
   else { const k = (ph - down) / (1 - down); u = u1 + (u0 - u1) * k; lift = Math.sin(k * Math.PI); }
@@ -746,20 +746,18 @@ function placeBrushOnBack(t) {
   up.addScaledVector(fwd, -up.dot(fwd)).normalize();   // 表面の法線（だいたい）
   const side = _bp.x.crossVectors(up, fwd).normalize();
   // ブラシの大きさは体の幅に合わせる（ブラシの頭は幅0.22）
-  const k = THREE.MathUtils.clamp(model.d.W * ws * 0.7 / 0.22, 0.3, 1.0);
+  const k = THREE.MathUtils.clamp(model.d.W * ws * 0.5 / 0.22, 0.25, 0.9);
   brush.scale.setScalar(k);
-  // ブラシのローカル: 毛は -y（先端 -0.095）、持ち手は +z。
-  // 持ち手は見ている人の側・ななめ上へ（人がそちらから持ってなでる感じ）
-  if (side.dot(_bp.b.copy(camera.position).sub(_bp.a)) < 0) side.negate();
-  // 頭は背中に平ら（y = 法線）、持ち手（+z）は見ている人の側へ。持ち手自体がななめ上に曲がっている
-  const hz = side, hy = up;
+  // ブラシのローカル: 毛は -y（先端 -0.095）、持ち手は +z（ななめ上に曲がっている）。
+  // 頭は背中に平ら（y = 法線）、持ち手はしっぽ側へ（どこから見ても頭や体にささらない）
+  const hz = fwd, hy = up;
   const hx = new THREE.Vector3().crossVectors(hy, hz);
   _bp.m.makeBasis(hx, hy, hz);
   brush.quaternion.setFromRotationMatrix(_bp.m);
   // 毛先が毛に少し沈むくらい（0.08）。戻るときは持ち上げる
-  brush.position.copy(_bp.a).addScaledVector(up, (0.088 + lift * 0.07) * k);
+  brush.position.copy(_bp.a).addScaledVector(up, (0.068 + lift * 0.035) * k); // 毛先は毛の中にうずめる
   // 少し傾けてなでる感じ
-  brush.rotateZ(ph < down ? 0.12 : -0.08);
+  brush.rotateX(ph < down ? 0.1 : -0.06);
 }
 function doBrush() {
   if (!ready()) return;
