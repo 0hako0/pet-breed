@@ -1429,10 +1429,31 @@ function pickFurnitureFor(p) {
 }
 
 // ----- ねる場所（ベッド2か所・いぬごや・こたつ・キャットタワー） -----
+// ベッドは1つに1匹（2匹を同じベッドに入れると体が重なるため）
 const BED_SPOTS = [
-  { pos: new THREE.Vector3(-3.85, 0.12, -3.3), heading: 0.9 },
-  { pos: new THREE.Vector3(-3.3, 0.12, -3.55), heading: -0.3 },
+  { pos: room.spots.bed.clone(), heading: 0.9 },
+  { pos: room.spots.bed2.clone(), heading: -0.6 },
 ];
+// ベッドがいっぱいのときの床の寝場所: ほかの寝ている子・ベッドと重ならない場所をさがす
+function floorSleepSpot(c) {
+  const taken = [...BED_SPOTS.map(b => b.pos)];
+  for (const o of [ctrl, ...buddies.map(b => b.ctrl)]) {
+    if (o !== c && o.model && o.petData?.sleeping) taken.push(o.pos);
+  }
+  let best = null, bestD = -1;
+  for (let t = 0; t < 24; t++) {
+    const a = Math.random() * Math.PI * 2, r = rnd(1.3, 2.4);
+    const x = -3.6 + Math.cos(a) * r, z = -3.4 + Math.abs(Math.sin(a)) * r;
+    const pt = new THREE.Vector3(x, 0, z);
+    pushOut(pt, ROOM_OBST);
+    pt.x = THREE.MathUtils.clamp(pt.x, room.bounds.minX, room.bounds.maxX);
+    pt.z = THREE.MathUtils.clamp(pt.z, room.bounds.minZ, room.bounds.maxZ);
+    const d = Math.min(...taken.map(q => Math.hypot(q.x - pt.x, q.z - pt.z)));
+    if (d > bestD) { bestD = d; best = pt; }
+    if (d > 1.4) break;
+  }
+  return { id: 'floor', i: 0, x: best.x, z: best.z };
+}
 function chooseSleepAt(c) {
   const p = c.petData, cat = p.species === 'cat';
   const ok = (id, i) => !spotUse.has(spotKey(id, i)) || spotUse.get(spotKey(id, i)) === c;
@@ -1444,9 +1465,8 @@ function chooseSleepAt(c) {
   }
   if (cat && ct && Math.random() < 0.5 && ok('cattower', 1)) return { id: 'cattower', i: 1 };
   for (let i = 0; i < BED_SPOTS.length; i++) if (ok('bed', i)) return { id: 'bed', i };
-  // ベッドがいっぱいならベッドのそばの床でよりそって寝る
-  const a = Math.random() * Math.PI * 2;
-  return { id: 'floor', i: 0, x: -3.5 + Math.cos(a) * 1.25, z: -3.2 + Math.abs(Math.sin(a)) * 1.25 };
+  // ベッドがいっぱいなら、ほかの子と重ならない床で寝る
+  return floorSleepSpot(c);
 }
 // 寝る場所の位置・向き・起きたときの降り先
 function placeOf(at) {
@@ -1487,7 +1507,7 @@ function placeSleeping(c) {
   if (!valid) {
     at = null;
     for (let i = 0; i < BED_SPOTS.length; i++) if (!spotUse.has(spotKey('bed', i))) { at = { id: 'bed', i }; break; }
-    if (!at) at = { id: 'floor', i: 0, x: -3.5 + rnd(-1, 1), z: -2.0 };
+    if (!at) at = floorSleepSpot(c);
   }
   if (at.id !== 'floor') takeSpot(at.id, at.i, c);
   p.sleepAt = at;

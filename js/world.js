@@ -246,18 +246,24 @@ export function buildRoom() {
   windowGroup.position.set(-1.2, 2.0, -S + 0.02);
   scene.add(windowGroup);
 
-  // ペットベッド
-  const bed = new THREE.Group();
-  const cushion = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.9, 0.14, 32), m('#9fc6e8'));
-  cushion.position.y = 0.07;
-  bed.add(cushion);
-  const rim = new THREE.Mesh(new THREE.TorusGeometry(0.88, 0.2, 14, 36), m('#6f9fcf'));
-  rim.rotation.x = Math.PI / 2;
-  rim.position.y = 0.18;
-  bed.add(rim);
-  bed.position.set(-3.6, 0, -3.4);
-  shadowy(bed);
-  scene.add(bed);
+  // ペットベッド（1つのベッドに1匹。2つ目は奥の右すみ）
+  function makeBed(c1, c2, x, z, k = 1) {
+    const g = new THREE.Group();
+    const cushion = new THREE.Mesh(new THREE.CylinderGeometry(0.85, 0.9, 0.14, 32), m(c1));
+    cushion.position.y = 0.07;
+    g.add(cushion);
+    const rim = new THREE.Mesh(new THREE.TorusGeometry(0.88, 0.2, 14, 36), m(c2));
+    rim.rotation.x = Math.PI / 2;
+    rim.position.y = 0.18;
+    g.add(rim);
+    g.position.set(x, 0, z);
+    g.scale.set(k, 1, k);
+    shadowy(g);
+    scene.add(g);
+    return g;
+  }
+  const bed = makeBed('#9fc6e8', '#6f9fcf', -3.6, -3.4);
+  const bed2 = makeBed('#f4c6d4', '#e39ab2', 4.35, -4.3, 0.85);
 
   // ごはん皿・水皿
   const bowl = makeBowl('#ff8a65');
@@ -365,13 +371,14 @@ export function buildRoom() {
   scene.add(shade);
 
   return {
-    scene, floor, bowl, water, bed, toybox,
+    scene, floor, bowl, water, bed, bed2, toybox,
     occluders: [toybox, plant, shelf], // カメラとペットの間に入ったら半透明にする物
     bounds: { minX: -S + 0.6, maxX: S - 0.6, minZ: -S + 0.6, maxZ: S - 0.4 },
     spots: {
       bowl: new THREE.Vector3(3.0, 0, -1.75),
       water: new THREE.Vector3(3.7, 0, -1.4),
       bed: new THREE.Vector3(-3.6, 0.12, -3.4),
+      bed2: new THREE.Vector3(4.35, 0.12, -4.3),
       center: new THREE.Vector3(0.3, 0, 0.6),
     },
     lights: { hemi, dir, lamp, sky: skyMat, sun, shade },
